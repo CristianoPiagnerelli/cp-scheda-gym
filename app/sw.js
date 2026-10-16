@@ -1,5 +1,5 @@
 // Cache dell'app per l'uso offline in palestra. Cambia VERSION a ogni rilascio.
-const VERSION = 'cp-scheda-gym-3';
+const VERSION = 'cp-scheda-gym-4';
 const ASSETS = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -14,16 +14,16 @@ self.addEventListener('activate', e => {
   );
 });
 
-// Risponde subito dalla cache (veloce anche senza campo) e aggiorna in background.
+// Prima la rete (così gli aggiornamenti arrivano subito); se non c'è campo o è lenta, la cache.
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(
     caches.open(VERSION).then(async cache => {
       const cached = await cache.match(e.request, { ignoreSearch: true });
-      const fresh = fetch(e.request)
-        .then(res => { if (res.ok) cache.put(e.request, res.clone()); return res; })
-        .catch(() => cached);
-      return cached || fresh;
+      const fresh = fetch(e.request).then(res => { if (res.ok) cache.put(e.request, res.clone()); return res; });
+      if (!cached) return fresh;
+      const slow = new Promise(r => setTimeout(() => r(cached), 3000));
+      return Promise.race([fresh.catch(() => cached), slow]);
     })
   );
 });

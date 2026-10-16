@@ -4,6 +4,7 @@
  * La copia con la chiave vera è in private/Code.gs (mai su GitHub).
  */
 const KEY = '__CHIAVE__';
+const SHEET_ID = ''; // vuoto se lo script è dentro il foglio
 const APP_URL = 'https://cristianopiagnerelli.github.io/cp-scheda-gym/';
 const LOG_HEAD = ['Inizio', 'Durata (min)', 'Giorno', 'Esercizio', 'Serie', 'Kg', 'Reps', 'Outlook', 'Nota esercizio', 'Nota allenamento', 'ID'];
 const TIPI = ['Pesi', 'Corpo libero', 'A tempo (sec)', 'Cardio (min)'];
@@ -52,7 +53,7 @@ function out_(o) {
 }
 
 function setup_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = SHEET_ID ? SpreadsheetApp.openById(SHEET_ID) : SpreadsheetApp.getActiveSpreadsheet();
   if (!ss.getSheetByName('Programma')) ss.getSheets()[0].setName('Programma');
   if (!ss.getSheetByName('Allenamenti')) {
     const log = ss.insertSheet('Allenamenti');
