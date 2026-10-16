@@ -215,9 +215,16 @@ function setCoach_(ss, b) {
 }
 
 // Cambia uno o più campi di un esercizio del Programma. b = { dayName, name, values: { kg: 22, 'recupero (s)': 90 } }
+// Le colonne che non esistono ancora vengono aggiunte in fondo (es. "Kg suggeriti", "Suggerito il").
 function updateProgram_(ss, b) {
   const prog = ss.getSheetByName('Programma');
-  const h = head_(prog);
+  let h = head_(prog);
+  Object.keys(b.values).forEach(k => {
+    if (h.indexOf(k.toLowerCase()) < 0) {
+      prog.getRange(1, h.length + 1).setValue(k).setFontWeight('bold').setBackground('#ff7a1a').setFontColor('#ffffff');
+      h = head_(prog);
+    }
+  });
   const v = prog.getDataRange().getValues();
   for (let r = 1; r < v.length; r++) {
     if (String(v[r][h.indexOf('giorno')]).trim() === b.dayName && String(v[r][h.indexOf('esercizio')]).trim() === b.name

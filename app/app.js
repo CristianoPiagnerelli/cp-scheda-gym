@@ -52,20 +52,33 @@ function setsText(e, kind) {
   }).join(', ');
 }
 
-// Regola di progressione semplice (doppia progressione): tutte le serie al massimo del range e non al limite -> aumenta.
-function suggestion(item, last) {
+// Carico suggerito. Priorità al coach (colonna "Kg suggeriti" del foglio) finché non è stato usato;
+// poi regola automatica: doppia progressione sull'outlook + riduzione se c'è stata una pausa.
+const stepFor = kg => (kg >= 30 ? 2.5 : kg > 10 ? 2 : 1);
+const roundTo = (kg, step) => Math.round(kg / step) * step;
+
+function suggest(item) {
   const ex = db.exercises[item.ex];
-  if (!last || ex?.kind !== 'weight') return '';
+  if (ex?.kind !== 'weight') return null;
+  const last = lastEntry(item.ex);
+  if (item.coachKg != null && (!last || !item.coachAt || last.s.start < item.coachAt))
+    return { kg: item.coachKg, by: 'coach', why: 'calcolato dal coach' };
+  if (!last) return item.weight != null ? { kg: item.weight, by: 'auto', why: 'dal programma' } : null;
   const [lo, hi] = range(item.reps);
   const sets = last.e.sets;
-  const kg = Math.max(...sets.map(s => s.kg || 0));
-  if (!kg || lo == null) return '';
-  if (last.e.outlook === 'Collapse' || sets.some(s => (s.reps ?? 0) < lo)) return `Resta a ${fmtKg(kg)} kg finché non chiudi tutte le serie nel range.`;
-  if (sets.length >= item.sets && sets.every(s => (s.reps ?? 0) >= hi) && last.e.outlook !== 'Barely') {
-    const step = kg >= 30 ? 2.5 : kg > 10 ? 2 : 1;
-    return `Hai chiuso tutto a ${hi}: prova ${fmtKg(kg + step)} kg.`;
-  }
-  return '';
+  let kg = Math.max(...sets.map(s => s.kg || 0));
+  if (!kg) return null;
+  const why = [];
+  const allTop = hi != null && sets.length >= item.sets && sets.every(s => (s.reps ?? 0) >= hi);
+  const st = stepFor(kg);
+  if (last.e.outlook === 'Collapse') { kg -= st; why.push('ultima volta Collapse: un passo indietro'); }
+  else if (lo != null && sets.some(s => (s.reps ?? 0) < lo)) why.push('chiudi prima tutte le serie nel range');
+  else if (allTop && last.e.outlook !== 'Barely') { kg += st; why.push(`chiuso tutto a ${hi}: +${fmtKg(st)} kg`); }
+  else why.push('stesso carico, punta a più ripetizioni');
+  const days = (Date.now() - last.s.start) / 864e5;
+  const f = days >= 84 ? 0.7 : days >= 42 ? 0.8 : days >= 21 ? 0.9 : 1;
+  if (f < 1) { kg *= f; why.push(`${Math.round(days / 7)} settimane di pausa: −${Math.round((1 - f) * 100)}%`); }
+  return { kg: roundTo(kg, stepFor(kg)), by: 'auto', why: why.join(' · ') };
 }
 
 function nextDay() {
@@ -125,6 +138,7 @@ function session() {
       ${wu.map(i => `<div class="wu"><input type="checkbox" data-act="wu" data-ex="${i.ex}" ${a.warmup[i.ex] ? 'checked' : ''}>
         <a class="grow" href="#/ex/${i.ex}">${h(exName(i.ex))}${i.note ? `<div class="muted small">${h(i.note)}</div>` : ''}</a>
         <span class="muted">${i.sets > 1 ? i.sets + '×' : ''}${h(i.reps)}${db.exercises[i.ex]?.kind === 'cardio' ? "'" : ''}</span></div>`).join('')}
+      <textarea data-field="warmupNote" placeholder="Note sul warm-up" style="margin-top:10px">${h(a.warmupNote || '')}</textarea>
     </details>` : ''}
     ${day.items.map(item => exerciseCard(item, a.entries[item.ex])).join('')}
     <label class="muted small">Note sull'allenamento</label>
@@ -140,16 +154,16 @@ function exerciseCard(item, entry) {
   const last = lastEntry(item.ex);
   const done = entry.sets.filter(s => s.done).length;
   const unit = ex.kind === 'time' ? 'sec' : ex.kind === 'cardio' ? 'min' : 'reps';
-  const tip = suggestion(item, last);
+  const sug = suggest(item);
   const lastTxt = last
     ? `Ultima volta (${dateIt(last.s.start)}): <b>${setsText(last.e, ex.kind)}</b>${last.e.outlook ? ' · ' + h(last.e.outlook) : ''}`
-    : item.weight != null ? `Dal programma: <b>${fmtKg(item.weight)} kg</b>` : '';
+    : item.weight != null ? `Ultimo carico registrato: <b>${fmtKg(item.weight)} kg</b>` : '';
   return `<div class="card ex ${done >= entry.sets.length ? 'done' : ''}">
     <div class="row between"><h3><a href="#/ex/${item.ex}" style="color:inherit">${h(ex.name)}</a></h3><span class="muted">${done}/${entry.sets.length}</span></div>
     <div class="muted small">${item.sets} × ${h(item.reps)} ${unit}${ex.kind !== 'cardio' ? ' · ' + restButton(db.active.dayId, item) : ''}${ex.perSide ? ' · kg per lato' : ''}${item.note ? ' · ' + h(item.note) : ''}</div>
     ${restPicker(db.active.dayId, item)}
     ${lastTxt ? `<div class="hint">${lastTxt}</div>` : ''}
-    ${tip ? `<div class="tip">${h(tip)}</div>` : ''}
+    ${sug ? `<div class="sugg">${sug.by === 'coach' ? 'Suggerito dal coach' : 'Suggerito'}: <b>${fmtKg(sug.kg)} kg${ex.perSide ? '/lato' : ''}</b> × ${h(item.reps)}<div class="muted small">${h(sug.why)}</div></div>` : ''}
     <div class="sets">
       ${entry.sets.map((s, i) => `<div class="set ${ex.kind === 'weight' ? '' : 'simple'}">
         <span class="n">${i + 1}</span>
@@ -243,7 +257,7 @@ function program() {
         const ex = db.exercises[it.ex];
         return `<tr><td><a href="#/ex/${it.ex}" style="color:inherit">${h(ex?.name || it.ex)}</a>${it.note ? `<div class="muted small">${h(it.note)}</div>` : ''}</td>
           <td>${it.sets}×${h(it.reps)}${ex?.kind === 'time' ? '"' : ex?.kind === 'cardio' ? "'" : ''}</td>
-          <td>${it.weight != null ? fmtKg(it.weight) + ' kg' + (ex?.perSide ? '/lato' : '') : ''}</td>
+          <td>${it.weight != null ? fmtKg(it.weight) + ' kg' + (ex?.perSide ? '/lato' : '') : ''}${(s => (s && s.kg !== it.weight ? `<div class="sugg-inline">→ ${fmtKg(s.kg)}</div>` : ''))(d.id === 'warmup' ? null : suggest(it))}</td>
           <td>${d.id === 'warmup' || ex?.kind === 'cardio' ? '' : restButton(d.id, it)}</td></tr>
           ${restEdit === `${d.id}|${it.ex}` ? `<tr><td colspan="4">${restPicker(d.id, it)}</td></tr>` : ''}`;
       }).join('')}</table>
@@ -307,11 +321,12 @@ function startSession(dayId) {
   const entries = {};
   for (const item of day.items) {
     const last = lastEntry(item.ex);
+    const sug = suggest(item);
     const [lo] = range(item.reps);
     entries[item.ex] = {
       sets: Array.from({ length: item.sets }, (_, i) => {
         const ls = last?.e.sets[i] || last?.e.sets[last.e.sets.length - 1];
-        return { kg: ls?.kg ?? item.weight ?? null, reps: ls?.reps ?? lo, done: false };
+        return { kg: sug?.kg ?? ls?.kg ?? item.weight ?? null, reps: sug ? lo : ls?.reps ?? lo, done: false };
       }),
       outlook: null,
       note: '',
@@ -334,7 +349,8 @@ function finishSession() {
   if (!entries.length) {
     if (!confirm('Nessuna serie segnata come fatta. Scartare l\'allenamento?')) return;
   } else {
-    const s = { id: a.id, dayId: a.dayId, dayName: day.name, start: a.start, end: Date.now(), entries, note: a.note };
+    const note = [a.warmupNote && `Warm-up: ${a.warmupNote}`, a.note].filter(Boolean).join(' · ');
+    const s = { id: a.id, dayId: a.dayId, dayName: day.name, start: a.start, end: Date.now(), entries, note };
     db.sessions.push(s);
     db.outbox.push(s);
     // il peso usato diventa il nuovo "Kg" del programma (lo fa anche il foglio)
@@ -452,6 +468,7 @@ document.addEventListener('input', e => {
   if (!el.dataset.field || !db.active) return;
   const f = el.dataset.field;
   if (f === 'sessionNote') db.active.note = el.value;
+  else if (f === 'warmupNote') db.active.warmupNote = el.value;
   else if (f === 'note') db.active.entries[el.dataset.ex].note = el.value;
   else db.active.entries[el.dataset.ex].sets[+el.dataset.i][f] = num(el.value);
   save();
@@ -493,7 +510,8 @@ function fromSheet(res) {
     (did !== 'warmup' && /^warm/i.test(String(r.fase ?? '').trim()) ? d.warmup : d.items).push({
       ex: id, order: num(r.ordine) ?? 99, sets: num(r.serie) || 1,
       reps: lo == null ? '' : hi !== lo ? `${lo}-${hi}` : `${lo}`,
-      weight: num(r.kg), rest: num(r['recupero (s)']) ?? (kind === 'weight' ? 90 : 60), note: String(r.note ?? ''),
+      weight: num(r.kg), coachKg: num(r['kg suggeriti']),
+      coachAt: typeof r['suggerito il'] === 'number' ? r['suggerito il'] : Date.parse(r['suggerito il']) || null, rest: num(r['recupero (s)']) ?? (kind === 'weight' ? 90 : 60), note: String(r.note ?? ''),
     });
   }
   [warmup, ...days].forEach(d => [d.items, d.warmup || []].forEach(l => l.sort((a, b) => a.order - b.order)));
