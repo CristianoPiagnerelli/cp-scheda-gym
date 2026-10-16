@@ -2,9 +2,11 @@
  * Script del Foglio Google "cp-scheda-gym": fa da ponte tra il foglio e l'app sul telefono.
  * Va incollato in Estensioni > Apps Script del foglio e pubblicato come "App web".
  * La copia con la chiave vera è in private/Code.gs (mai su GitHub).
+ *
+ * @OnlyCurrentDoc  ← lo script può accedere SOLO a questo foglio, a nient'altro del tuo account.
  */
 const KEY = '__CHIAVE__';
-const SHEET_ID = ''; // vuoto se lo script è dentro il foglio
+const SHEET_ID = ''; // vuoto: lo script è dentro il foglio (consigliato, permessi minimi)
 const APP_URL = 'https://cristianopiagnerelli.github.io/cp-scheda-gym/';
 const LOG_HEAD = ['Inizio', 'Durata (min)', 'Giorno', 'Esercizio', 'Serie', 'Kg', 'Reps', 'Outlook', 'Nota esercizio', 'Nota allenamento', 'ID'];
 const TIPI = ['Pesi', 'Corpo libero', 'A tempo (sec)', 'Cardio (min)'];
