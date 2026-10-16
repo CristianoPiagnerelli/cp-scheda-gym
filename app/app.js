@@ -343,18 +343,21 @@ function startSession(dayId) {
   go('#/session');
 }
 
-function finishSession() {
+// auto = chiusura automatica: niente conferme, fine = ultima interazione
+function finishSession(auto = false) {
   const a = db.active;
   const day = findDay(a.dayId);
+  if (!day) { db.active = null; save(); return go('#/'); } // giorno tolto dal foglio nel frattempo
   const entries = day.items
     .map(item => ({ item, en: a.entries[item.ex] }))
     .filter(({ en }) => en && en.sets.some(s => s.done))
     .map(({ item, en }) => ({ ex: item.ex, sets: en.sets.filter(s => s.done).map(({ kg, reps }) => ({ kg, reps })), outlook: en.outlook, note: en.note }));
   if (!entries.length) {
-    if (!confirm('Nessuna serie segnata come fatta. Scartare l\'allenamento?')) return;
+    if (!auto && !confirm('Nessuna serie segnata come fatta. Scartare l\'allenamento?')) return;
   } else {
     const note = [a.warmupNote && `Warm-up: ${a.warmupNote}`, a.note].filter(Boolean).join(' · ');
-    const s = { id: a.id, dayId: a.dayId, dayName: day.name, start: a.start, end: Date.now(), entries, note };
+    const end = auto ? a.lastAt || a.start + Math.max(30, entries.reduce((n, e) => n + e.sets.length, 0) * 3) * 60000 : Date.now();
+    const s = { id: a.id, dayId: a.dayId, dayName: day.name, start: a.start, end, entries, note: [note, auto && 'chiuso in automatico'].filter(Boolean).join(' · ') };
     db.sessions.push(s);
     db.outbox.push(s);
     // il peso usato diventa il nuovo "Kg" del programma (lo fa anche il foglio)
@@ -368,8 +371,9 @@ function finishSession() {
   db.timer = null;
   save();
   clearNotif();
-  toast(entries.length ? 'Allenamento salvato 💪' : 'Allenamento scartato');
-  go(entries.length ? '#/history' : '#/');
+  toast(auto ? (entries.length ? 'Allenamento dimenticato aperto: chiuso e salvato' : 'Allenamento vuoto dimenticato aperto: scartato')
+    : entries.length ? 'Allenamento salvato 💪' : 'Allenamento scartato');
+  go(entries.length && !auto ? '#/history' : '#/');
   sync();
 }
 
@@ -465,7 +469,15 @@ const actions = {
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]');
   if (el && actions[el.dataset.act]) actions[el.dataset.act](el, e);
+  if (el && db.active) { db.active.lastAt = Date.now(); save(); }
 });
+
+// Allenamento dimenticato aperto: dopo 3 ore senza interazioni si chiude da solo.
+const IDLE_CLOSE = 3 * 3600e3;
+function autoClose() {
+  const a = db?.active;
+  if (a && Date.now() - (a.lastAt || a.start) > IDLE_CLOSE) finishSession(true);
+}
 
 document.addEventListener('input', e => {
   const el = e.target;
@@ -475,6 +487,7 @@ document.addEventListener('input', e => {
   else if (f === 'warmupNote') db.active.warmupNote = el.value;
   else if (f === 'note') db.active.entries[el.dataset.ex].note = el.value;
   else db.active.entries[el.dataset.ex].sets[+el.dataset.i][f] = num(el.value);
+  db.active.lastAt = Date.now();
   save();
 });
 
@@ -690,10 +703,13 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
 addEventListener('hashchange', render);
 addEventListener('online', () => sync());
 document.addEventListener('visibilitychange', () => {
+  autoClose();
   keepAwake();
   tick();
   if (document.visibilityState === 'visible' && Date.now() - (db.lastSync || 0) > 5 * 60000) sync();
 });
+autoClose();
 render();
 sync();
 setInterval(tick, 250);
+setInterval(autoClose, 60000);
