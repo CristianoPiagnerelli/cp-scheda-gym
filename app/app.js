@@ -645,13 +645,11 @@ function tick() {
   $('#t-bar').style.width = `${Math.min(100, (1 - left / t.total) * 100)}%`;
 }
 
-// App aperta: solo il beep (esce dagli auricolari se collegati, altrimenti dalla cassa, e non ferma
-// il podcast) e una notifica silenziosa. App in secondo piano: notifica con il suono di sistema.
+// Beep (auricolari se collegati, altrimenti cassa) + notifica con il suono di sistema: a Cristiano piacciono entrambi.
 function alarm() {
-  const visible = document.visibilityState === 'visible';
   navigator.vibrate?.([400, 150, 400, 150, 400]);
-  if (visible) beep();
-  notify('Recupero finito 🔔', 'Vai con la prossima serie', visible ? { silent: true } : { vibrate: [400, 150, 400], requireInteraction: false });
+  if (document.visibilityState === 'visible') beep();
+  notify('Recupero finito 🔔', 'Vai con la prossima serie', { vibrate: [400, 150, 400], requireInteraction: false });
 }
 
 /* ---------- notifiche e schermo acceso ---------- */
