@@ -41,6 +41,7 @@ function handle_(e, body) {
   try {
     if ((e.parameter.k || (body && body.k)) !== KEY) return out_({ ok: false, error: 'Chiave non valida' });
     const ss = setup_();
+    if (body && body.action === 'setRest') return out_(setRest_(ss, body));
     if (body && body.action === 'saveSession') return out_(saveSession_(ss, body.session));
     return out_(load_(ss));
   } catch (err) {
@@ -122,4 +123,20 @@ function saveSession_(ss, s) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// Cambia il recupero di un esercizio (scelto dall'app).
+function setRest_(ss, b) {
+  const prog = ss.getSheetByName('Programma');
+  const v = prog.getDataRange().getValues();
+  const h = v[0].map(x => String(x).trim().toLowerCase());
+  const gi = h.indexOf('giorno'), ei = h.indexOf('esercizio'), ri = h.indexOf('recupero (s)');
+  if (ri < 0) return { ok: true, skipped: 'colonna Recupero (s) mancante' };
+  for (let r = 1; r < v.length; r++) {
+    if (String(v[r][gi]).trim() === b.dayName && String(v[r][ei]).trim() === b.name) {
+      prog.getRange(r + 1, ri + 1).setValue(Number(b.rest));
+      return { ok: true };
+    }
+  }
+  return { ok: true, skipped: 'esercizio non trovato' };
 }

@@ -142,7 +142,8 @@ function exerciseCard(item, entry) {
     : item.weight != null ? `Dal programma: <b>${fmtKg(item.weight)} kg</b>` : '';
   return `<div class="card ex ${done >= entry.sets.length ? 'done' : ''}">
     <div class="row between"><h3><a href="#/ex/${item.ex}" style="color:inherit">${h(ex.name)}</a></h3><span class="muted">${done}/${entry.sets.length}</span></div>
-    <div class="muted small">${item.sets} × ${h(item.reps)} ${unit}${ex.kind !== 'cardio' ? ' · rec ' + restLabel(item.rest) : ''}${ex.perSide ? ' · kg per lato' : ''}${item.note ? ' · ' + h(item.note) : ''}</div>
+    <div class="muted small">${item.sets} × ${h(item.reps)} ${unit}${ex.kind !== 'cardio' ? ' · ' + restButton(db.active.dayId, item) : ''}${ex.perSide ? ' · kg per lato' : ''}${item.note ? ' · ' + h(item.note) : ''}</div>
+    ${restPicker(db.active.dayId, item)}
     ${lastTxt ? `<div class="hint">${lastTxt}</div>` : ''}
     ${tip ? `<div class="tip">${h(tip)}</div>` : ''}
     <div class="sets">
@@ -225,7 +226,8 @@ function program() {
         return `<tr><td>${h(ex?.name || it.ex)}${it.note ? `<div class="muted small">${h(it.note)}</div>` : ''}</td>
           <td>${it.sets}×${h(it.reps)}${ex?.kind === 'time' ? '"' : ex?.kind === 'cardio' ? "'" : ''}</td>
           <td>${it.weight != null ? fmtKg(it.weight) + ' kg' + (ex?.perSide ? '/lato' : '') : ''}</td>
-          <td class="muted">${d.id === 'warmup' || ex?.kind === 'cardio' ? '' : restLabel(it.rest)}</td></tr>`;
+          <td>${d.id === 'warmup' || ex?.kind === 'cardio' ? '' : restButton(d.id, it)}</td></tr>
+          ${restEdit === `${d.id}|${it.ex}` ? `<tr><td colspan="4">${restPicker(d.id, it)}</td></tr>` : ''}`;
       }).join('')}</table>
     </div>`).join('')}`;
 }
@@ -242,6 +244,7 @@ function data() {
       <h3>Foglio Google</h3>
       ${db.link ? `<p class="muted">Collegato. Ultima sincronizzazione: ${db.lastSync ? dateIt(db.lastSync) + ' ' + clock(db.lastSync).slice(0, 5) : 'mai'}.</p>
         ${pending ? `<p class="tip">${pending} allenamenti in attesa di invio.</p>` : ''}
+        ${db.pending.length ? `<p class="tip">${db.pending.length} modifiche al programma in attesa di invio.</p>` : ''}
         ${db.syncError ? `<p class="tip">Ultimo errore: ${h(db.syncError)}</p>` : ''}
         <div class="row wrap">
           ${db.sheetUrl ? `<a class="btn grow" href="${h(db.sheetUrl)}" target="_blank" rel="noopener">Apri il foglio</a>` : ''}
@@ -350,7 +353,46 @@ function setLink(link) {
   }
 }
 
+/* ---------- tempi di recupero modificabili dall'app ---------- */
+
+const REST_OPTIONS = [30, 45, 60, 75, 90, 120, 150, 180];
+let restEdit = null; // "giorno|esercizio" del selettore aperto
+
+const restButton = (dayId, item) =>
+  `<button class="restbtn" data-act="restOpen" data-day="${dayId}" data-ex="${item.ex}">rec ${restLabel(item.rest)} ✎</button>`;
+
+function restPicker(dayId, item) {
+  if (restEdit !== `${dayId}|${item.ex}`) return '';
+  return `<div class="chips">${REST_OPTIONS.map(s => `<button class="chip ${s === item.rest ? 'on' : ''}" data-v="rest" data-act="restSet" data-day="${dayId}" data-ex="${item.ex}" data-sec="${s}">${restLabel(s)}</button>`).join('')}
+    <button class="chip" data-act="restSet" data-day="${dayId}" data-ex="${item.ex}" data-sec="altro">altro…</button></div>`;
+}
+
+function setRest(dayId, exId, sec) {
+  const day = findDay(dayId);
+  const item = day.items.find(i => i.ex === exId);
+  item.rest = sec;
+  // una sola modifica in coda per esercizio: vale l'ultima
+  db.pending = db.pending.filter(p => !(p.action === 'setRest' && p.dayName === day.name && p.name === exName(exId)));
+  db.pending.push({ action: 'setRest', dayName: day.name, name: exName(exId), rest: sec });
+  save();
+  toast(`Recupero ${exName(exId)}: ${restLabel(sec)}`);
+}
+
 const actions = {
+  restOpen: el => { const k = `${el.dataset.day}|${el.dataset.ex}`; restEdit = restEdit === k ? null : k; render(); },
+  restSet: el => {
+    let sec = el.dataset.sec;
+    if (sec === 'altro') {
+      sec = prompt('Recupero in secondi', findDay(el.dataset.day).items.find(i => i.ex === el.dataset.ex).rest);
+      if (sec == null) return;
+    }
+    sec = Math.round(num(sec));
+    if (!(sec > 0 && sec <= 900)) return toast('Valore non valido');
+    setRest(el.dataset.day, el.dataset.ex, sec);
+    restEdit = null;
+    render();
+    sync();
+  },
   start: el => startSession(el.dataset.day),
   wu: el => { db.active.warmup[el.dataset.ex] = el.checked; save(); },
   set: el => {
@@ -465,6 +507,11 @@ async function sync(manual = false) {
   if (!navigator.onLine) { if (manual) toast('Sei offline: sincronizzo appena torna la rete'); return; }
   syncing = true;
   try {
+    while (db.pending.length) {
+      await api(db.pending[0]);
+      db.pending.shift();
+      save();
+    }
     while (db.outbox.length) {
       await api({ action: 'saveSession', session: toSheet(db.outbox[0]) });
       db.outbox.shift();
@@ -588,7 +635,7 @@ function load() {
   // Nessun dato personale nel codice pubblicato: tutto arriva dal Foglio Google collegato.
   db = {
     link: null, sheetUrl: null, exercises: {}, program: { warmup: { id: 'warmup', name: 'Warm-up', items: [] }, days: [] },
-    coachMessage: '', sessions: [], outbox: [], active: null, timer: null, lastSync: null, syncError: null,
+    coachMessage: '', sessions: [], outbox: [], pending: [], active: null, timer: null, lastSync: null, syncError: null,
     ...(db || {}),
   };
   save();
