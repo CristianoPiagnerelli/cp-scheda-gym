@@ -297,6 +297,8 @@ function data() {
     <div class="card">
       <h3>Notifiche e schermo</h3>
       <p class="muted">Durante l'allenamento lo schermo resta acceso. A fine recupero il telefono vibra e suona; con le notifiche attive l'avviso arriva anche a schermo bloccato.</p>
+      <button class="full" data-act="testSound" style="margin-bottom:8px">🔔 Prova il suono di fine recupero</button>
+      <p class="muted small">Provalo con gli auricolari e un podcast acceso: il beep deve sentirsi sopra il podcast senza fermarlo.</p>
       <button class="full" data-act="askNotif">Attiva notifiche (${'Notification' in window ? Notification.permission : 'non supportate'})</button>
     </div>`;
 }
@@ -455,6 +457,7 @@ const actions = {
   timerAdd: el => { if (db.timer) { db.timer.end += +el.dataset.sec * 1000; db.timer.total = Math.max(1, db.timer.total + +el.dataset.sec); save(); showTimerNotif(); tick(); } },
   timerSkip: () => { db.timer = null; save(); clearNotif(); tick(); },
   askNotif: async () => { await askNotif(); render(); },
+  testSound: () => { unlockAudio(); setTimeout(() => { beep(); navigator.vibrate?.([400, 150, 400]); }, 150); },
   linkSave: () => setLink($('#linkInput').value),
   syncNow: () => sync(true),
   unlink: () => {
@@ -642,10 +645,13 @@ function tick() {
   $('#t-bar').style.width = `${Math.min(100, (1 - left / t.total) * 100)}%`;
 }
 
+// App aperta: solo il beep (esce dagli auricolari se collegati, altrimenti dalla cassa, e non ferma
+// il podcast) e una notifica silenziosa. App in secondo piano: notifica con il suono di sistema.
 function alarm() {
+  const visible = document.visibilityState === 'visible';
   navigator.vibrate?.([400, 150, 400, 150, 400]);
-  beep();
-  notify('Recupero finito 🔔', 'Vai con la prossima serie', { vibrate: [400, 150, 400], requireInteraction: false });
+  if (visible) beep();
+  notify('Recupero finito 🔔', 'Vai con la prossima serie', visible ? { silent: true } : { vibrate: [400, 150, 400], requireInteraction: false });
 }
 
 /* ---------- notifiche e schermo acceso ---------- */
