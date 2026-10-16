@@ -1,20 +1,19 @@
 'use strict';
 
-const KEY = 'palestra.v1';
+const KEY = 'cp-scheda-gym.v2';
 const OUTLOOKS = ['Easy', 'Barely/doable', 'Barely', 'Collapse'];
-const KINDS = { weight: 'Pesi', reps: 'Corpo libero', time: 'A tempo (sec)', cardio: 'Cardio (min)' };
 
 const $ = s => document.querySelector(s);
 const h = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const num = v => (v === '' || v == null || isNaN(+v) ? null : +v);
+const num = v => { if (v === '' || v == null) return null; const n = +String(v).replace(',', '.'); return isNaN(n) ? null : n; };
+const slug = s => String(s).trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 const fmtKg = v => (v == null ? '' : String(v).replace('.', ','));
 const pad = n => String(n).padStart(2, '0');
 const clock = t => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
 const mmss = s => `${Math.floor(s / 60)}:${pad(s % 60)}`;
 const restLabel = s => (s >= 60 ? `${Math.floor(s / 60)}'${s % 60 ? pad(s % 60) : ''}` : `${s}"`);
 const dateIt = t => new Date(t).toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short' });
-const dayKey = t => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const range = reps => { const m = String(reps).match(/(\d+)(?:\s*-\s*(\d+))?/); return m ? [+m[1], +(m[2] || m[1])] : [null, null]; };
 
 let db;
@@ -77,12 +76,15 @@ function nextDay() {
 /* ---------- viste ---------- */
 
 function home() {
-  if (!db.program.days.length) return `<h1>Palestra</h1>
+  if (!db.link) return `<h1>Palestra</h1>
     <div class="card accent">
-      <h3>Benvenuto</h3>
-      <p class="muted">I tuoi dati restano solo su questo telefono. Per iniziare importa il file del programma (es. <b>programma.json</b>, mandato da Drive, mail o chat).</p>
-      <input type="file" accept=".json,application/json" id="importFile" class="full">
+      <h3>Collega il tuo Foglio Google</h3>
+      <p class="muted">Programma e allenamenti stanno nel foglio <b>cp-scheda-gym</b> sul tuo Drive. Apri il link di collegamento che ti sei mandato, oppure incollalo qui.</p>
+      ${linkForm()}
     </div>`;
+  if (!db.program.days.length) return `<h1>Palestra</h1>
+    <div class="card">${db.syncError ? `<p class="tip">Errore: ${h(db.syncError)}</p>` : '<p class="muted">Sto leggendo il foglio…</p>'}
+      <button class="full" data-act="syncNow">Riprova</button></div>`;
   const a = db.active;
   const week = db.sessions.filter(s => s.start > Date.now() - 7 * 864e5).length;
   const month = db.sessions.filter(s => s.start > Date.now() - 28 * 864e5).length;
@@ -137,7 +139,7 @@ function exerciseCard(item, entry) {
   const tip = suggestion(item, last);
   const lastTxt = last
     ? `Ultima volta (${dateIt(last.s.start)}): <b>${setsText(last.e, ex.kind)}</b>${last.e.outlook ? ' · ' + h(last.e.outlook) : ''}`
-    : item.weight != null ? `Da Notion: <b>${fmtKg(item.weight)} kg</b>${item.outlook ? ' · ' + h(item.outlook) : ''}` : '';
+    : item.weight != null ? `Dal programma: <b>${fmtKg(item.weight)} kg</b>` : '';
   return `<div class="card ex ${done >= entry.sets.length ? 'done' : ''}">
     <div class="row between"><h3><a href="#/ex/${item.ex}" style="color:inherit">${h(ex.name)}</a></h3><span class="muted">${done}/${entry.sets.length}</span></div>
     <div class="muted small">${item.sets} × ${h(item.reps)} ${unit}${ex.kind !== 'cardio' ? ' · rec ' + restLabel(item.rest) : ''}${ex.perSide ? ' · kg per lato' : ''}${item.note ? ' · ' + h(item.note) : ''}</div>
@@ -173,8 +175,9 @@ function historyView() {
         <div class="muted small">${Math.round((s.end - s.start) / 60000)} min · ${s.entries.length} esercizi</div></div><span class="muted">›</span></summary>
       <table>${s.entries.map(e => `<tr><td>${h(exName(e.ex))}</td><td>${setsText(e, db.exercises[e.ex]?.kind)}${e.outlook ? `<div class="muted small">${h(e.outlook)}</div>` : ''}${e.note ? `<div class="muted small">${h(e.note)}</div>` : ''}</td></tr>`).join('')}</table>
       ${s.note ? `<p class="muted">${h(s.note)}</p>` : ''}
-      <button class="small danger" data-act="delSession" data-id="${s.id}">Elimina</button>
-    </details>`).join('')}`;
+      ${db.outbox.some(o => o.id === s.id) ? '<p class="tip">Non ancora salvato nel foglio: lo invio appena c\'è connessione.</p>' : ''}
+    </details>`).join('')}
+    <p class="muted small">Per correggere o eliminare un allenamento modifica le righe nella scheda Allenamenti del foglio.</p>`;
 }
 
 function exercisePage(id) {
@@ -207,79 +210,63 @@ function chart(pts) {
 }
 
 function program() {
-  const opts = Object.entries(db.exercises).sort((a, b) => a[1].name.localeCompare(b[1].name))
-    .map(([id, e]) => `<option value="${id}">${h(e.name)}</option>`).join('');
   return `<h1>Programma</h1>
-    <p class="muted">Le modifiche valgono dal prossimo allenamento. Lo storico non cambia.</p>
-    ${allDays().map(d => `<div class="card">
-      <div class="row between">
-        ${d.id === 'warmup' ? `<h3>${h(d.name)}</h3>` : `<input type="text" class="grow" data-pday="${d.id}" data-pfield="name" value="${h(d.name)}">`}
-        ${d.id === 'warmup' ? '' : `<button class="small danger" data-act="delDay" data-day="${d.id}">Elimina giorno</button>`}
-      </div>
-      ${d.items.map((it, i) => `<div class="pitem">
-        <b>${h(exName(it.ex))} <span class="muted small">${KINDS[db.exercises[it.ex]?.kind] || ''}</span></b>
-        <div class="row">
-          <button class="small ghost" data-act="mv" data-day="${d.id}" data-i="${i}" data-d="-1" ${i ? '' : 'disabled'}>↑</button>
-          <button class="small ghost" data-act="mv" data-day="${d.id}" data-i="${i}" data-d="1" ${i < d.items.length - 1 ? '' : 'disabled'}>↓</button>
-          <button class="small danger ghost" data-act="rmItem" data-day="${d.id}" data-i="${i}">✕</button>
-        </div>
-        <div class="pfields">
-          <label>Serie<input type="number" data-pday="${d.id}" data-i="${i}" data-pfield="sets" value="${it.sets}"></label>
-          <label>Reps<input type="text" data-pday="${d.id}" data-i="${i}" data-pfield="reps" value="${h(it.reps)}"></label>
-          ${db.exercises[it.ex]?.kind === 'weight' ? `<label>Kg base<input type="number" step="0.5" data-pday="${d.id}" data-i="${i}" data-pfield="weight" value="${it.weight ?? ''}"></label>` : ''}
-          ${d.id === 'warmup' ? '' : `<label>Rec. (s)<input type="number" step="5" data-pday="${d.id}" data-i="${i}" data-pfield="rest" value="${it.rest}"></label>`}
-          <label class="wide">Nota<input type="text" data-pday="${d.id}" data-i="${i}" data-pfield="note" value="${h(it.note || '')}"></label>
-        </div>
-      </div>`).join('')}
-      <div class="row wrap" style="margin-top:10px">
-        <select class="grow" id="add-${d.id}"><option value="">Aggiungi esercizio esistente…</option>${opts}</select>
-        <button class="small" data-act="addItem" data-day="${d.id}">Aggiungi</button>
-      </div>
-    </div>`).join('')}
     <div class="card">
-      <h3>Nuovo esercizio</h3>
-      <div class="row wrap" style="margin-top:8px">
-        <input type="text" id="newExName" class="grow" placeholder="Nome (es. Hip Thrust)">
-        <select id="newExKind">${Object.entries(KINDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
-        <label class="muted small"><input type="checkbox" id="newExSide"> kg per lato</label>
-        <button class="small" data-act="newEx">Crea</button>
+      <p class="muted">Il programma si modifica nel Foglio Google (scheda <b>Programma</b>): una riga per esercizio, come in Notion. Le modifiche arrivano qui alla prossima sincronizzazione.</p>
+      <div class="row wrap">
+        ${db.sheetUrl ? `<a class="btn primary grow" href="${h(db.sheetUrl)}" target="_blank" rel="noopener">Apri il foglio</a>` : ''}
+        <button class="grow" data-act="syncNow" ${db.active ? 'disabled' : ''}>Aggiorna dal foglio</button>
       </div>
-      <p class="muted small">Poi aggiungilo a un giorno con il menu sopra.</p>
     </div>
-    <button class="full" data-act="addDay">+ Aggiungi giorno</button>`;
+    ${allDays().map(d => `<div class="card">
+      <h3>${h(d.name)}</h3>
+      <table>${d.items.map(it => {
+        const ex = db.exercises[it.ex];
+        return `<tr><td>${h(ex?.name || it.ex)}${it.note ? `<div class="muted small">${h(it.note)}</div>` : ''}</td>
+          <td>${it.sets}×${h(it.reps)}${ex?.kind === 'time' ? '"' : ex?.kind === 'cardio' ? "'" : ''}</td>
+          <td>${it.weight != null ? fmtKg(it.weight) + ' kg' + (ex?.perSide ? '/lato' : '') : ''}</td>
+          <td class="muted">${d.id === 'warmup' || ex?.kind === 'cardio' ? '' : restLabel(it.rest)}</td></tr>`;
+      }).join('')}</table>
+    </div>`).join('')}`;
+}
+
+function linkForm() {
+  return `<input type="url" id="linkInput" class="full" placeholder="Link di collegamento" value="">
+    <button class="primary full" style="margin-top:8px" data-act="linkSave">Collega</button>`;
 }
 
 function data() {
-  const n = db.sessions.length;
-  return `<h1>Dati e coach</h1>
+  const pending = db.outbox.length;
+  return `<h1>Foglio e impostazioni</h1>
     <div class="card">
-      <h3>Per il coach</h3>
-      <p class="muted">Copia il riepilogo e incollalo nella chat con Claude: analizza i progressi e ti propone il programma aggiornato.</p>
-      <button class="primary full" data-act="coachCopy">Copia riepilogo allenamenti</button>
+      <h3>Foglio Google</h3>
+      ${db.link ? `<p class="muted">Collegato. Ultima sincronizzazione: ${db.lastSync ? dateIt(db.lastSync) + ' ' + clock(db.lastSync).slice(0, 5) : 'mai'}.</p>
+        ${pending ? `<p class="tip">${pending} allenamenti in attesa di invio.</p>` : ''}
+        ${db.syncError ? `<p class="tip">Ultimo errore: ${h(db.syncError)}</p>` : ''}
+        <div class="row wrap">
+          ${db.sheetUrl ? `<a class="btn grow" href="${h(db.sheetUrl)}" target="_blank" rel="noopener">Apri il foglio</a>` : ''}
+          <button class="primary grow" data-act="syncNow">Sincronizza ora</button>
+        </div>
+        <details style="margin-top:12px"><summary class="muted small">Cambia collegamento</summary>${linkForm()}
+          <button class="danger full" style="margin-top:8px" data-act="unlink">Scollega questo telefono</button></details>`
+      : linkForm()}
     </div>
     <div class="card">
-      <h3>Backup</h3>
-      <p class="muted">${n} allenamenti salvati su questo telefono. Fai un backup ogni tanto (es. su Google Drive).</p>
-      <button class="full" data-act="export">Esporta backup (.json)</button>
-      <p class="muted small" style="margin-top:12px">Importa un backup completo, oppure un file con solo il programma preparato dal coach (lo storico resta).</p>
-      <input type="file" accept=".json,application/json" id="importFile" class="full">
-    </div>
-    <div class="card">
-      <h3>Nota del coach</h3>
-      <textarea data-field="coachMessage">${h(db.coachMessage || '')}</textarea>
+      <h3>Coach</h3>
+      <p class="muted">Claude legge direttamente il foglio: chiedigli un'analisi quando vuoi. I suoi consigli compaiono nella home (scheda <b>Coach</b> del foglio).</p>
     </div>
     <div class="card">
       <h3>Notifiche e schermo</h3>
       <p class="muted">Durante l'allenamento lo schermo resta acceso. A fine recupero il telefono vibra e suona; con le notifiche attive l'avviso arriva anche a schermo bloccato.</p>
       <button class="full" data-act="askNotif">Attiva notifiche (${'Notification' in window ? Notification.permission : 'non supportate'})</button>
-    </div>
-    <button class="danger full" data-act="reset">Cancella tutto e reimporta da Notion</button>`;
+    </div>`;
 }
 
 /* ---------- render ---------- */
 
 function render() {
   const [route, arg] = location.hash.replace(/^#\/?/, '').split('/');
+  if (route === 'collega' && arg) return setLink(decodeURIComponent(arg));
   const views = { '': home, session, history: historyView, ex: exercisePage, program, data };
   $('#main').innerHTML = (views[route] || home)(arg && decodeURIComponent(arg));
   document.querySelectorAll('nav a').forEach(a => {
@@ -290,6 +277,7 @@ function render() {
   tick();
 }
 const go = hash => (location.hash === hash ? render() : (location.hash = hash));
+const onSessionPage = () => location.hash.startsWith('#/session');
 
 /* ---------- azioni ---------- */
 
@@ -325,8 +313,10 @@ function finishSession() {
   if (!entries.length) {
     if (!confirm('Nessuna serie segnata come fatta. Scartare l\'allenamento?')) return;
   } else {
-    db.sessions.push({ id: a.id, dayId: a.dayId, dayName: day.name, start: a.start, end: Date.now(), entries, note: a.note });
-    // il peso usato diventa il nuovo "kg base" del programma
+    const s = { id: a.id, dayId: a.dayId, dayName: day.name, start: a.start, end: Date.now(), entries, note: a.note };
+    db.sessions.push(s);
+    db.outbox.push(s);
+    // il peso usato diventa il nuovo "Kg" del programma (lo fa anche il foglio)
     for (const e of entries) {
       const item = day.items.find(i => i.ex === e.ex);
       const kgs = e.sets.map(s => s.kg).filter(v => v != null);
@@ -339,15 +329,25 @@ function finishSession() {
   clearNotif();
   toast(entries.length ? 'Allenamento salvato 💪' : 'Allenamento scartato');
   go(entries.length ? '#/history' : '#/');
+  sync();
 }
 
-function moveItem(dayId, i, d) {
-  const items = findDay(dayId).items;
-  const j = i + d;
-  if (j < 0 || j >= items.length) return;
-  [items[i], items[j]] = [items[j], items[i]];
-  save();
-  render();
+function setLink(link) {
+  try {
+    const u = new URL(link.trim());
+    if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(u.href) || !u.searchParams.get('k')) throw new Error();
+    db.link = u.href;
+    db.syncError = null;
+    save();
+    toast('Foglio collegato');
+    history.replaceState(null, '', location.pathname + '#/');
+    render();
+    sync();
+  } catch {
+    toast('Link non valido');
+    history.replaceState(null, '', location.pathname + '#/data');
+    render();
+  }
 }
 
 const actions = {
@@ -370,37 +370,14 @@ const actions = {
   cancel: () => { if (confirm('Annullare l\'allenamento? Quanto segnato finora andrà perso.')) { db.active = null; db.timer = null; save(); clearNotif(); go('#/'); } },
   timerAdd: el => { if (db.timer) { db.timer.end += +el.dataset.sec * 1000; db.timer.total = Math.max(1, db.timer.total + +el.dataset.sec); save(); showTimerNotif(); tick(); } },
   timerSkip: () => { db.timer = null; save(); clearNotif(); tick(); },
-  delSession: el => { if (confirm('Eliminare questo allenamento dallo storico?')) { db.sessions = db.sessions.filter(s => s.id !== el.dataset.id); save(); render(); } },
-  mv: el => moveItem(el.dataset.day, +el.dataset.i, +el.dataset.d),
-  rmItem: el => { const d = findDay(el.dataset.day); if (confirm(`Togliere ${exName(d.items[+el.dataset.i].ex)} da ${d.name}?`)) { d.items.splice(+el.dataset.i, 1); save(); render(); } },
-  addItem: el => {
-    const id = $(`#add-${el.dataset.day}`).value;
-    if (!id) return;
-    const ex = db.exercises[id];
-    findDay(el.dataset.day).items.push({ ex: id, sets: el.dataset.day === 'warmup' ? 1 : 3, reps: ex.kind === 'cardio' ? '15' : ex.kind === 'time' ? '30' : '8-10', weight: null, rest: ex.kind === 'weight' ? 90 : 60, note: '' });
-    save(); render();
-  },
-  newEx: () => {
-    const name = $('#newExName').value.trim();
-    if (!name) return;
-    const id = name.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    if (db.exercises[id]) return toast('Esiste già');
-    db.exercises[id] = { name, kind: $('#newExKind').value, perSide: $('#newExSide').checked };
-    save(); render(); toast(`Creato: ${name}`);
-  },
-  addDay: () => { const n = db.program.days.length + 1; db.program.days.push({ id: uid(), name: `Giorno ${n}`, items: [] }); save(); render(); },
-  delDay: el => { const d = findDay(el.dataset.day); if (confirm(`Eliminare ${d.name} dal programma? Lo storico resta.`)) { db.program.days = db.program.days.filter(x => x !== d); save(); render(); } },
-  coachCopy: async () => {
-    const txt = coachSummary();
-    try { await navigator.clipboard.writeText(txt); toast('Copiato: incollalo nella chat'); }
-    catch { $('#main').insertAdjacentHTML('beforeend', `<textarea readonly style="min-height:240px">${h(txt)}</textarea>`); }
-  },
-  export: () => exportBackup(),
   askNotif: async () => { await askNotif(); render(); },
-  reset: async () => {
-    if (!confirm('Cancellare TUTTO (storico compreso) e ripartire dalla scheda Notion? Fai prima un backup.')) return;
+  linkSave: () => setLink($('#linkInput').value),
+  syncNow: () => sync(true),
+  unlink: () => {
+    if (db.outbox.length && !confirm(`Ci sono ${db.outbox.length} allenamenti non ancora inviati al foglio: andranno persi. Continuare?`)) return;
+    if (!db.outbox.length && !confirm('Scollegare questo telefono dal foglio?')) return;
     localStorage.removeItem(KEY);
-    await load();
+    load();
     go('#/');
   },
 };
@@ -412,75 +389,102 @@ document.addEventListener('click', e => {
 
 document.addEventListener('input', e => {
   const el = e.target;
-  if (el.dataset.field) {
-    const f = el.dataset.field;
-    if (f === 'coachMessage') db.coachMessage = el.value;
-    else if (f === 'sessionNote') db.active.note = el.value;
-    else if (f === 'note') db.active.entries[el.dataset.ex].note = el.value;
-    else db.active.entries[el.dataset.ex].sets[+el.dataset.i][f] = num(el.value);
-    save();
-  } else if (el.dataset.pfield) {
-    const d = findDay(el.dataset.pday);
-    const f = el.dataset.pfield;
-    if (f === 'name') d.name = el.value;
-    else d.items[+el.dataset.i][f] = ['sets', 'rest', 'weight'].includes(f) ? num(el.value) ?? (f === 'weight' ? null : 1) : el.value;
-    save();
-  }
+  if (!el.dataset.field || !db.active) return;
+  const f = el.dataset.field;
+  if (f === 'sessionNote') db.active.note = el.value;
+  else if (f === 'note') db.active.entries[el.dataset.ex].note = el.value;
+  else db.active.entries[el.dataset.ex].sets[+el.dataset.i][f] = num(el.value);
+  save();
 });
 
-document.addEventListener('change', async e => {
-  if (e.target.id !== 'importFile' || !e.target.files[0]) return;
-  try {
-    const obj = JSON.parse(await e.target.files[0].text());
-    if (obj.sessions && obj.program) {
-      if (!confirm(`Sostituire tutti i dati con il backup (${obj.sessions.length} allenamenti)?`)) return;
-      db = { ...db, ...obj, active: null, timer: null };
-    } else if (obj.program) {
-      if (!confirm('Caricare il nuovo programma? Lo storico resta.')) return;
-      db.program = obj.program;
-      db.exercises = { ...db.exercises, ...(obj.exercises || {}) };
-      if (obj.coachMessage) db.coachMessage = obj.coachMessage;
-    } else throw new Error('formato');
-    save();
-    toast('Importato');
-    go('#/');
-  } catch { toast('File non valido'); }
-});
+/* ---------- sincronizzazione con il Foglio Google ---------- */
 
-/* ---------- coach / backup ---------- */
+const KIND_CODE = { 'pesi': 'weight', 'corpo libero': 'reps', 'a tempo (sec)': 'time', 'cardio (min)': 'cardio' };
+const dayIdOf = name => (/^warm/i.test(String(name).trim()) ? 'warmup' : slug(name));
 
-function coachSummary() {
-  const since = Date.now() - 60 * 864e5;
-  const ss = db.sessions.filter(s => s.start >= since);
-  const lines = [
-    `Riepilogo palestra – ${dayKey(Date.now())}`,
-    `Ultimi 60 giorni: ${ss.length} allenamenti (${(ss.length / (60 / 7)).toFixed(1)} a settimana).`,
-    '',
-  ];
-  for (const s of ss) {
-    lines.push(`${dayKey(s.start)} ${s.dayName} (${Math.round((s.end - s.start) / 60000)} min)`);
-    for (const e of s.entries) {
-      const ex = db.exercises[e.ex];
-      lines.push(`- ${ex?.name || e.ex}${ex?.perSide ? ' [kg per lato]' : ''}: ${setsText(e, ex?.kind)}${e.outlook ? ' · ' + e.outlook : ''}${e.note ? ' · ' + e.note : ''}`);
-    }
-    if (s.note) lines.push(`  Note: ${s.note}`);
-  }
-  lines.push('', 'Programma attuale (JSON):', JSON.stringify({ exercises: db.exercises, program: db.program }));
-  return lines.join('\n');
+async function api(body) {
+  const k = new URL(db.link).searchParams.get('k');
+  const res = await fetch(db.link, body
+    ? { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ ...body, k }) }
+    : {});
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const out = await res.json();
+  if (!out.ok) throw new Error(out.error || 'errore del foglio');
+  return out;
 }
 
-async function exportBackup() {
-  const { active, timer, ...rest } = db;
-  const name = `palestra-backup-${dayKey(Date.now())}.json`;
-  const file = new File([JSON.stringify(rest, null, 1)], name, { type: 'application/json' });
-  if (navigator.canShare?.({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: name }); return; } catch (err) { if (err.name === 'AbortError') return; }
+function fromSheet(res) {
+  const exercises = {};
+  const warmup = { id: 'warmup', name: 'Warm-up', items: [] };
+  const days = [];
+  for (const r of res.program) {
+    const name = String(r.esercizio ?? '').trim();
+    const dname = String(r.giorno ?? '').trim();
+    if (!name || !dname) continue;
+    const id = slug(name);
+    const kind = KIND_CODE[String(r.tipo ?? '').trim().toLowerCase()] || (num(r.kg) != null ? 'weight' : 'reps');
+    exercises[id] = { name, kind, perSide: /^s[iì]/i.test(String(r['per lato'] ?? '')) };
+    const did = dayIdOf(dname);
+    let d = did === 'warmup' ? warmup : days.find(x => x.id === did);
+    if (!d) days.push(d = { id: did, name: dname, items: [] });
+    if (did === 'warmup') d.name = dname;
+    const lo = num(r['reps min']);
+    const hi = num(r['reps max']) ?? lo;
+    d.items.push({
+      ex: id, order: num(r.ordine) ?? 99, sets: num(r.serie) || 1,
+      reps: lo == null ? '' : hi !== lo ? `${lo}-${hi}` : `${lo}`,
+      weight: num(r.kg), rest: num(r['recupero (s)']) ?? (kind === 'weight' ? 90 : 60), note: String(r.note ?? ''),
+    });
   }
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(file);
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  [warmup, ...days].forEach(d => d.items.sort((a, b) => a.order - b.order));
+
+  const byId = new Map();
+  for (const r of res.sessions) {
+    if (!r.id || !r.esercizio) continue;
+    let s = byId.get(String(r.id));
+    if (!s) {
+      const start = typeof r.inizio === 'number' ? r.inizio : Date.parse(r.inizio);
+      s = { id: String(r.id), dayId: dayIdOf(r.giorno), dayName: String(r.giorno), start, end: start + (num(r['durata (min)']) || 0) * 60000, entries: [], note: String(r['nota allenamento'] ?? '') };
+      byId.set(s.id, s);
+    }
+    const exId = slug(r.esercizio);
+    if (!exercises[exId]) exercises[exId] = { name: String(r.esercizio).trim(), kind: num(r.kg) != null ? 'weight' : 'reps', perSide: false };
+    let en = s.entries.find(e => e.ex === exId);
+    if (!en) s.entries.push(en = { ex: exId, sets: [], outlook: r.outlook || null, note: String(r['nota esercizio'] ?? '') });
+    en.sets.push({ kg: num(r.kg), reps: num(r.reps) });
+  }
+  const sessions = [...byId.values()].filter(s => !isNaN(s.start)).sort((a, b) => a.start - b.start);
+  return { exercises, program: { warmup, days }, sessions, coachMessage: res.coach || '', sheetUrl: res.url };
+}
+
+const toSheet = s => ({ ...s, entries: s.entries.map(e => ({ ...e, name: exName(e.ex) })) });
+
+let syncing = false;
+async function sync(manual = false) {
+  if (!db.link || syncing) return;
+  if (!navigator.onLine) { if (manual) toast('Sei offline: sincronizzo appena torna la rete'); return; }
+  syncing = true;
+  try {
+    while (db.outbox.length) {
+      await api({ action: 'saveSession', session: toSheet(db.outbox[0]) });
+      db.outbox.shift();
+      save();
+    }
+    if (!db.active) {
+      const fresh = fromSheet(await api());
+      Object.assign(db, fresh);
+    }
+    db.lastSync = Date.now();
+    db.syncError = null;
+    if (manual) toast('Sincronizzato');
+  } catch (err) {
+    db.syncError = String(err.message || err);
+    if (manual) toast('Errore: ' + db.syncError);
+  } finally {
+    syncing = false;
+    save();
+    if (!onSessionPage()) render();
+  }
 }
 
 /* ---------- timer recupero ---------- */
@@ -579,21 +583,27 @@ async function keepAwake() {
 
 /* ---------- avvio ---------- */
 
-async function load() {
+function load() {
   try { db = JSON.parse(localStorage.getItem(KEY)); } catch { db = null; }
-  // Nessun dato personale nel codice pubblicato: il programma si importa da file al primo avvio.
-  if (!db) {
-    db = { version: 1, exercises: {}, program: { warmup: { id: 'warmup', name: 'Warm-up', items: [] }, days: [] }, coachMessage: '', sessions: [], active: null, timer: null };
-    save();
-  }
+  // Nessun dato personale nel codice pubblicato: tutto arriva dal Foglio Google collegato.
+  db = {
+    link: null, sheetUrl: null, exercises: {}, program: { warmup: { id: 'warmup', name: 'Warm-up', items: [] }, days: [] },
+    coachMessage: '', sessions: [], outbox: [], active: null, timer: null, lastSync: null, syncError: null,
+    ...(db || {}),
+  };
+  save();
 }
 
-(async () => {
-  await load();
-  navigator.storage?.persist?.();
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-  addEventListener('hashchange', render);
-  document.addEventListener('visibilitychange', () => { keepAwake(); tick(); });
-  render();
-  setInterval(tick, 250);
-})();
+load();
+navigator.storage?.persist?.();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+addEventListener('hashchange', render);
+addEventListener('online', () => sync());
+document.addEventListener('visibilitychange', () => {
+  keepAwake();
+  tick();
+  if (document.visibilityState === 'visible' && Date.now() - (db.lastSync || 0) > 5 * 60000) sync();
+});
+render();
+sync();
+setInterval(tick, 250);

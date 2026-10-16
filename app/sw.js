@@ -1,5 +1,5 @@
 // Cache dell'app per l'uso offline in palestra. Cambia VERSION a ogni rilascio.
-const VERSION = 'palestra-2';
+const VERSION = 'cp-scheda-gym-3';
 const ASSETS = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
