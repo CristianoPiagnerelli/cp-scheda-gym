@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111418">
+<title>Palestra</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="main"></main>
+
+<div id="timer" hidden>
+  <div class="t-top"><span id="t-label"></span><span id="t-end"></span></div>
+  <div class="t-row">
+    <button data-act="timerAdd" data-sec="-15">−15</button>
+    <span id="t-left">0:00</span>
+    <button data-act="timerAdd" data-sec="15">+15</button>
+    <button data-act="timerSkip" class="ghost">Salta</button>
+  </div>
+  <div class="t-bar"><i id="t-bar"></i></div>
+</div>
+
+<nav>
+  <a href="#/">Oggi</a>
+  <a href="#/history">Storico</a>
+  <a href="#/program">Programma</a>
+  <a href="#/data">Dati</a>
+</nav>
+<script src="app.js"></script>
+</body>
+</html>
