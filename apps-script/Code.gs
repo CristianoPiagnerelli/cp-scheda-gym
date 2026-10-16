@@ -88,6 +88,7 @@ function load_(ss) {
     sessions: table_(ss.getSheetByName('Allenamenti')),
     guide: ss.getSheetByName('Guida') ? table_(ss.getSheetByName('Guida')) : [],
     coach: String(ss.getSheetByName('Coach').getRange('A2').getValue() || ''),
+    next: (c => ({ day: String(c[0][0] || ''), at: c[0][1] instanceof Date ? c[0][1].getTime() : Number(c[0][1]) || 0 }))(ss.getSheetByName('Coach').getRange('A5:B5').getValues()),
   };
 }
 
@@ -209,8 +210,11 @@ function setGuide_(ss, b) {
   return { ok: true, rows: b.rows.length };
 }
 
+// b = { text } per la nota; b = { next: 'Giorno 3' } per scegliere il prossimo allenamento (vale finché non ne fai uno).
 function setCoach_(ss, b) {
-  ss.getSheetByName('Coach').getRange('A2').setValue(b.text || '');
+  const c = ss.getSheetByName('Coach');
+  if (b.text !== undefined) c.getRange('A2').setValue(b.text || '');
+  if (b.next !== undefined) c.getRange('A4:B5').setValues([['Prossimo giorno', 'Impostato il'], [b.next || '', new Date()]]);
   return { ok: true };
 }
 

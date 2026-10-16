@@ -83,6 +83,9 @@ function suggest(item) {
 
 function nextDay() {
   const days = db.program.days;
+  // scelto dal coach (scheda Coach del foglio), finché non fai un allenamento dopo quella data
+  const forced = db.next?.day && days.find(d => d.name === db.next.day);
+  if (forced && !db.sessions.some(s => s.start > (db.next.at || 0))) return forced;
   const last = [...db.sessions].reverse().find(s => days.some(d => d.id === s.dayId));
   if (!last) return days[0];
   const i = days.findIndex(d => d.id === last.dayId);
@@ -109,6 +112,7 @@ function home() {
     <h1>Palestra</h1>
     ${db.coachMessage ? `<div class="card accent"><div class="muted small">Nota del coach</div><p>${h(db.coachMessage).replace(/\n/g, '<br>')}</p></div>` : ''}
     ${a ? `<div class="card accent"><div class="row between"><div><h3>Allenamento in corso</h3><div class="muted">${h(findDay(a.dayId)?.name)} · iniziato alle ${clock(a.start).slice(0, 5)}</div></div><a class="btn primary" href="#/session">Riprendi</a></div></div>` : ''}
+    <p class="muted small">${db.syncError ? `⚠ Foglio non raggiungibile: ${h(db.syncError)}` : db.lastSync ? `Foglio sincronizzato alle ${clock(db.lastSync).slice(0, 5)}` : ''}${db.outbox.length ? ` · ${db.outbox.length} da inviare` : ''}</p>
     <div class="card row between">
       <div><b>${week}</b> <span class="muted">negli ultimi 7 giorni</span></div>
       <div><b>${(month / 4).toFixed(1).replace('.', ',')}</b> <span class="muted">a settimana (4 sett.)</span></div>
@@ -140,7 +144,7 @@ function session() {
         <span class="muted">${i.sets > 1 ? i.sets + '×' : ''}${h(i.reps)}${db.exercises[i.ex]?.kind === 'cardio' ? "'" : ''}</span></div>`).join('')}
       <textarea data-field="warmupNote" placeholder="Note sul warm-up" style="margin-top:10px">${h(a.warmupNote || '')}</textarea>
     </details>` : ''}
-    ${day.items.map(item => exerciseCard(item, a.entries[item.ex])).join('')}
+    ${day.items.filter(item => a.entries[item.ex]).map(item => exerciseCard(item, a.entries[item.ex])).join('')}
     <label class="muted small">Note sull'allenamento</label>
     <textarea data-field="sessionNote">${h(a.note || '')}</textarea>
     <div class="row" style="margin-top:14px">
@@ -537,7 +541,7 @@ function fromSheet(res) {
     en.sets.push({ kg: num(r.kg), reps: num(r.reps) });
   }
   const sessions = [...byId.values()].filter(s => !isNaN(s.start)).sort((a, b) => a.start - b.start);
-  return { exercises, program: { warmup, days }, guide, sessions, coachMessage: res.coach || '', sheetUrl: res.url };
+  return { next: res.next || null, exercises, program: { warmup, days }, guide, sessions, coachMessage: res.coach || '', sheetUrl: res.url };
 }
 
 const toSheet = s => ({ ...s, entries: s.entries.map(e => ({ ...e, name: exName(e.ex) })) });
@@ -558,10 +562,8 @@ async function sync(manual = false) {
       db.outbox.shift();
       save();
     }
-    if (!db.active) {
-      const fresh = fromSheet(await api());
-      Object.assign(db, fresh);
-    }
+    // anche durante un allenamento: quello in corso resta com'è, si aggiorna solo il resto
+    Object.assign(db, fromSheet(await api()));
     db.lastSync = Date.now();
     db.syncError = null;
     if (manual) toast('Sincronizzato');
