@@ -7,7 +7,9 @@ Il link con la chiave viene letto da private/link-collegamento.txt (mai su GitHu
 import json
 import pathlib
 import sys
+import time
 import urllib.parse
+import urllib.error
 import urllib.request
 
 ROOT = pathlib.Path(__file__).parent
@@ -16,11 +18,18 @@ url = urllib.parse.unquote(link.split("#/collega/", 1)[1])
 key = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["k"][0]
 
 
-def call(body=None):
+def call(body=None, tries=4):
     req = urllib.request.Request(url, data=json.dumps({**body, "k": key}).encode() if body else None,
                                  headers={"Content-Type": "text/plain;charset=utf-8"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        return json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return json.load(r)
+    except urllib.error.HTTPError:
+        # ogni tanto Google risponde 404 al reindirizzamento: le azioni sono ripetibili, quindi si riprova
+        if tries <= 1:
+            raise
+        time.sleep(3)
+        return call(body, tries - 1)
 
 
 if __name__ == "__main__":
