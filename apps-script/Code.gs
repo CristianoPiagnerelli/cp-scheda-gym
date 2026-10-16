@@ -41,7 +41,8 @@ function handle_(e, body) {
   try {
     if ((e.parameter.k || (body && body.k)) !== KEY) return out_({ ok: false, error: 'Chiave non valida' });
     const ss = setup_();
-    if (body && body.action === 'setRest') return out_(setRest_(ss, body));
+    const act = body && { setRest: setRest_, setWarmup: setWarmup_, setGuide: setGuide_, setCoach: setCoach_, updateProgram: updateProgram_, deleteSessionsSince: deleteSessionsSince_ }[body.action];
+    if (act) return out_(act(ss, body));
     if (body && body.action === 'saveSession') return out_(saveSession_(ss, body.session));
     return out_(load_(ss));
   } catch (err) {
@@ -85,6 +86,7 @@ function load_(ss) {
     url: ss.getUrl(),
     program: table_(ss.getSheetByName('Programma')),
     sessions: table_(ss.getSheetByName('Allenamenti')),
+    guide: ss.getSheetByName('Guida') ? table_(ss.getSheetByName('Guida')) : [],
     coach: String(ss.getSheetByName('Coach').getRange('A2').getValue() || ''),
   };
 }
@@ -133,10 +135,107 @@ function setRest_(ss, b) {
   const gi = h.indexOf('giorno'), ei = h.indexOf('esercizio'), ri = h.indexOf('recupero (s)');
   if (ri < 0) return { ok: true, skipped: 'colonna Recupero (s) mancante' };
   for (let r = 1; r < v.length; r++) {
-    if (String(v[r][gi]).trim() === b.dayName && String(v[r][ei]).trim() === b.name) {
+    if (String(v[r][gi]).trim() === b.dayName && String(v[r][ei]).trim() === b.name && !/^warm/i.test(String(v[r][h.indexOf('fase')] || ''))) {
       prog.getRange(r + 1, ri + 1).setValue(Number(b.rest));
       return { ok: true };
     }
   }
   return { ok: true, skipped: 'esercizio non trovato' };
+}
+
+/* ---------- azioni del coach (usate da Claude con coach.py) ---------- */
+
+const GUIDE_HEAD = ['Esercizio', 'Immagini', 'Muscoli', 'Esecuzione', 'Consigli', 'Video'];
+
+function head_(sh) {
+  return sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => String(h).trim().toLowerCase());
+}
+
+// Colonna "Fase" nel Programma: "Warm-up" per il riscaldamento di quel giorno, vuota per l'allenamento.
+function ensureFase_(prog) {
+  let h = head_(prog);
+  if (h.indexOf('fase') < 0) {
+    prog.getRange(1, h.length + 1).setValue('Fase').setFontWeight('bold').setBackground('#ff7a1a').setFontColor('#ffffff');
+    h = head_(prog);
+  }
+  return h;
+}
+
+// Sostituisce il warm-up di un giorno. b = { dayName, items: [{ esercizio, tipo, serie, repsMin, repsMax, note }] }
+function setWarmup_(ss, b) {
+  const prog = ss.getSheetByName('Programma');
+  const h = ensureFase_(prog);
+  const col = n => h.indexOf(n);
+  const v = prog.getDataRange().getValues();
+  // via le righe del warm-up di quel giorno e quelle del vecchio warm-up comune
+  for (let r = v.length - 1; r >= 1; r--) {
+    const g = String(v[r][col('giorno')]).trim(), f = String(v[r][col('fase')] || '').trim();
+    if (/^warm/i.test(g) || (g === b.dayName && /^warm/i.test(f))) prog.deleteRow(r + 1);
+  }
+  const rows = b.items.map((it, i) => {
+    const row = new Array(h.length).fill('');
+    const set = (n, x) => { if (col(n) >= 0) row[col(n)] = x == null ? '' : x; };
+    set('giorno', b.dayName); set('fase', 'Warm-up'); set('ordine', i + 1); set('esercizio', it.esercizio);
+    set('tipo', it.tipo || 'Corpo libero'); set('serie', it.serie || 1); set('reps min', it.repsMin); set('reps max', it.repsMax ?? it.repsMin);
+    set('note', it.note || '');
+    return row;
+  });
+  if (!rows.length) return { ok: true };
+  const now = prog.getDataRange().getValues();
+  let at = now.findIndex((r, i) => i > 0 && String(r[col('giorno')]).trim() === b.dayName);
+  if (at < 0) at = now.length; // giorno nuovo: in fondo
+  prog.insertRowsBefore(at + 1, rows.length);
+  prog.getRange(at + 1, 1, rows.length, h.length).setValues(rows).setBackground('#fff3e8');
+  return { ok: true, rows: rows.length };
+}
+
+// Aggiunge o aggiorna le schede della Guida. b = { rows: [{ esercizio, immagini, muscoli, esecuzione, consigli, video }] }
+function setGuide_(ss, b) {
+  let g = ss.getSheetByName('Guida');
+  if (!g) {
+    g = ss.insertSheet('Guida');
+    g.getRange(1, 1, 1, GUIDE_HEAD.length).setValues([GUIDE_HEAD]).setFontWeight('bold').setBackground('#ff7a1a').setFontColor('#ffffff');
+    g.setFrozenRows(1);
+  }
+  const v = g.getDataRange().getValues();
+  const names = v.map(r => String(r[0]).trim().toLowerCase());
+  b.rows.forEach(x => {
+    const row = [x.esercizio, x.immagini || '', x.muscoli || '', x.esecuzione || '', x.consigli || '', x.video || ''];
+    const i = names.indexOf(String(x.esercizio).trim().toLowerCase());
+    if (i > 0) g.getRange(i + 1, 1, 1, row.length).setValues([row]);
+    else { g.appendRow(row); names.push(String(x.esercizio).trim().toLowerCase()); }
+  });
+  g.getRange(2, 1, Math.max(g.getLastRow() - 1, 1), GUIDE_HEAD.length).setWrap(true).setVerticalAlignment('top');
+  return { ok: true, rows: b.rows.length };
+}
+
+function setCoach_(ss, b) {
+  ss.getSheetByName('Coach').getRange('A2').setValue(b.text || '');
+  return { ok: true };
+}
+
+// Cambia uno o più campi di un esercizio del Programma. b = { dayName, name, values: { kg: 22, 'recupero (s)': 90 } }
+function updateProgram_(ss, b) {
+  const prog = ss.getSheetByName('Programma');
+  const h = head_(prog);
+  const v = prog.getDataRange().getValues();
+  for (let r = 1; r < v.length; r++) {
+    if (String(v[r][h.indexOf('giorno')]).trim() === b.dayName && String(v[r][h.indexOf('esercizio')]).trim() === b.name
+        && !/^warm/i.test(String(v[r][h.indexOf('fase')] || ''))) {
+      Object.entries(b.values).forEach(([k, x]) => { const c = h.indexOf(k.toLowerCase()); if (c >= 0) prog.getRange(r + 1, c + 1).setValue(x); });
+      return { ok: true };
+    }
+  }
+  return { ok: false, error: 'Esercizio non trovato: ' + b.dayName + ' / ' + b.name };
+}
+
+// Cancella dagli Allenamenti le righe iniziate da `since` (ms) in poi: serve per togliere i test.
+function deleteSessionsSince_(ss, b) {
+  const log = ss.getSheetByName('Allenamenti');
+  const v = log.getDataRange().getValues();
+  let n = 0;
+  for (let r = v.length - 1; r >= 1; r--) {
+    if (v[r][0] instanceof Date && v[r][0].getTime() >= b.since) { log.deleteRow(r + 1); n++; }
+  }
+  return { ok: true, deleted: n };
 }

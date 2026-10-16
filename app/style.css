@@ -122,3 +122,8 @@ nav a.on { color: var(--accent); font-weight: 700; }
   border: 1px dashed var(--muted); color: var(--text);
 }
 .chip.on[data-v="rest"] { background: var(--accent); color: #1a0d00; }
+.gallery { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0 4px; }
+.gallery img { width: 100%; border-radius: 10px; background: #fff; aspect-ratio: 4 / 3; object-fit: cover; }
+.steps { margin: 6px 0 12px; padding-left: 22px; }
+.steps li { margin: 4px 0; }
+.wu a { color: var(--text); text-decoration: none; }

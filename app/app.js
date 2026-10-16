@@ -1,6 +1,7 @@
 'use strict';
 
 const KEY = 'cp-scheda-gym.v2';
+const IMG_BASE = 'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/';
 const OUTLOOKS = ['Easy', 'Barely/doable', 'Barely', 'Collapse'];
 
 const $ = s => document.querySelector(s);
@@ -21,6 +22,8 @@ const save = () => localStorage.setItem(KEY, JSON.stringify(db));
 const exName = id => db.exercises[id]?.name || id;
 const allDays = () => [db.program.warmup, ...db.program.days];
 const findDay = id => allDays().find(d => d.id === id);
+// warm-up del giorno (scheda Programma, Fase = Warm-up); altrimenti quello comune
+const warmupOf = day => (day.warmup?.length ? day.warmup : db.program.warmup.items);
 
 function toast(msg) {
   const el = document.createElement('div');
@@ -113,15 +116,16 @@ function session() {
   const a = db.active;
   if (!a) return `<h1>Nessun allenamento in corso</h1><a class="btn primary" href="#/">Torna a Oggi</a>`;
   const day = findDay(a.dayId);
-  const wu = db.program.warmup;
-  const wuDone = wu.items.filter(i => a.warmup[i.ex]).length;
+  const wu = warmupOf(day);
+  const wuDone = wu.filter(i => a.warmup[i.ex]).length;
   return `
     <div class="row between"><h1>${h(day.name)}</h1><span class="muted" id="elapsed"></span></div>
-    <details class="card" ${wuDone < wu.items.length ? 'open' : ''}>
-      <summary class="row between"><h3>Warm-up</h3><span class="muted">${wuDone}/${wu.items.length}</span></summary>
-      ${wu.items.map(i => `<label class="wu"><input type="checkbox" data-act="wu" data-ex="${i.ex}" ${a.warmup[i.ex] ? 'checked' : ''}>
-        <span class="grow">${h(exName(i.ex))}</span><span class="muted">${i.sets > 1 ? i.sets + '×' : ''}${h(i.reps)}</span></label>`).join('')}
-    </details>
+    ${wu.length ? `<details class="card" ${wuDone < wu.length ? 'open' : ''}>
+      <summary class="row between"><h3>Warm-up</h3><span class="muted">${wuDone}/${wu.length}</span></summary>
+      ${wu.map(i => `<div class="wu"><input type="checkbox" data-act="wu" data-ex="${i.ex}" ${a.warmup[i.ex] ? 'checked' : ''}>
+        <a class="grow" href="#/ex/${i.ex}">${h(exName(i.ex))}${i.note ? `<div class="muted small">${h(i.note)}</div>` : ''}</a>
+        <span class="muted">${i.sets > 1 ? i.sets + '×' : ''}${h(i.reps)}${db.exercises[i.ex]?.kind === 'cardio' ? "'" : ''}</span></div>`).join('')}
+    </details>` : ''}
     ${day.items.map(item => exerciseCard(item, a.entries[item.ex])).join('')}
     <label class="muted small">Note sull'allenamento</label>
     <textarea data-field="sessionNote">${h(a.note || '')}</textarea>
@@ -185,13 +189,26 @@ function exercisePage(id) {
   const ex = db.exercises[id];
   const rows = db.sessions.map(s => ({ s, e: s.entries.find(e => e.ex === id) })).filter(r => r.e);
   const pts = rows.map(r => ({ t: r.s.start, v: Math.max(...r.e.sets.map(x => (ex?.kind === 'weight' ? x.kg : x.reps) || 0)) }));
-  return `<h1>${h(ex?.name || id)}</h1>
+  const g = db.guide?.[id];
+  const list = txt => String(txt || '').split('|').map(x => x.trim()).filter(Boolean);
+  const imgs = list(g?.immagini?.replace(/,/g, '|')).flatMap(x => (/^https?:/.test(x) ? [x] : [0, 1].map(n => `${IMG_BASE}${x}/${n}.jpg`)));
+  const video = `https://www.youtube.com/results?search_query=${encodeURIComponent((g?.video || ex?.name || id) + ' esecuzione')}`;
+  return `<p><a href="javascript:history.back()">‹ Indietro</a></p>
+    <h1>${h(ex?.name || id)}</h1>
+    ${imgs.length ? `<div class="gallery">${imgs.map(u => `<img src="${h(u)}" alt="" loading="lazy" onerror="this.remove()">`).join('')}</div>` : ''}
+    ${g ? `<div class="card">
+      ${g.muscoli ? `<p><span class="muted small">Muscoli</span><br>${h(g.muscoli)}</p>` : ''}
+      ${list(g.esecuzione).length ? `<h3 style="margin-top:12px">Come si fa</h3><ol class="steps">${list(g.esecuzione).map(x => `<li>${h(x)}</li>`).join('')}</ol>` : ''}
+      ${list(g.consigli).length ? `<h3>Consigli</h3><ul class="steps">${list(g.consigli).map(x => `<li>${h(x)}</li>`).join('')}</ul>` : ''}
+    </div>` : '<p class="muted">Guida non ancora disponibile per questo esercizio.</p>'}
+    <a class="btn full" href="${video}" target="_blank" rel="noopener">▶ Guarda un video</a>
+    ${rows.length ? `<h2>I tuoi progressi</h2>
     <p class="muted">${ex?.kind === 'weight' ? 'Carico massimo per allenamento (kg)' : 'Massimo per allenamento'}</p>
     ${pts.length > 1 ? chart(pts) : '<p class="muted">Servono almeno due allenamenti per il grafico.</p>'}
     <table><tr><th>Data</th><th>Serie</th><th></th></tr>
       ${rows.reverse().map(r => `<tr><td>${dateIt(r.s.start)}</td><td>${setsText(r.e, ex?.kind)}</td><td class="muted">${h(r.e.outlook || '')}</td></tr>`).join('')}
-    </table>
-    <p><a href="javascript:history.back()">‹ Indietro</a></p>`;
+    </table>` : ''}
+    ${g?.immagini ? '<p class="muted small">Foto: Free Exercise DB (pubblico dominio).</p>' : ''}`;
 }
 
 function chart(pts) {
@@ -219,11 +236,12 @@ function program() {
         <button class="grow" data-act="syncNow" ${db.active ? 'disabled' : ''}>Aggiorna dal foglio</button>
       </div>
     </div>
-    ${allDays().map(d => `<div class="card">
+    ${allDays().filter(d => d.items.length && (d.id !== 'warmup' || db.program.days.some(x => !x.warmup?.length))).map(d => `<div class="card">
       <h3>${h(d.name)}</h3>
+      ${d.warmup?.length ? `<p class="muted small" style="margin-top:8px">Warm-up: ${d.warmup.map(i => `<a href="#/ex/${i.ex}">${h(exName(i.ex))}</a>`).join(' · ')}</p>` : ''}
       <table>${d.items.map(it => {
         const ex = db.exercises[it.ex];
-        return `<tr><td>${h(ex?.name || it.ex)}${it.note ? `<div class="muted small">${h(it.note)}</div>` : ''}</td>
+        return `<tr><td><a href="#/ex/${it.ex}" style="color:inherit">${h(ex?.name || it.ex)}</a>${it.note ? `<div class="muted small">${h(it.note)}</div>` : ''}</td>
           <td>${it.sets}×${h(it.reps)}${ex?.kind === 'time' ? '"' : ex?.kind === 'cardio' ? "'" : ''}</td>
           <td>${it.weight != null ? fmtKg(it.weight) + ' kg' + (ex?.perSide ? '/lato' : '') : ''}</td>
           <td>${d.id === 'warmup' || ex?.kind === 'cardio' ? '' : restButton(d.id, it)}</td></tr>
@@ -468,17 +486,22 @@ function fromSheet(res) {
     exercises[id] = { name, kind, perSide: /^s[iì]/i.test(String(r['per lato'] ?? '')) };
     const did = dayIdOf(dname);
     let d = did === 'warmup' ? warmup : days.find(x => x.id === did);
-    if (!d) days.push(d = { id: did, name: dname, items: [] });
+    if (!d) days.push(d = { id: did, name: dname, items: [], warmup: [] });
     if (did === 'warmup') d.name = dname;
     const lo = num(r['reps min']);
     const hi = num(r['reps max']) ?? lo;
-    d.items.push({
+    (did !== 'warmup' && /^warm/i.test(String(r.fase ?? '').trim()) ? d.warmup : d.items).push({
       ex: id, order: num(r.ordine) ?? 99, sets: num(r.serie) || 1,
       reps: lo == null ? '' : hi !== lo ? `${lo}-${hi}` : `${lo}`,
       weight: num(r.kg), rest: num(r['recupero (s)']) ?? (kind === 'weight' ? 90 : 60), note: String(r.note ?? ''),
     });
   }
-  [warmup, ...days].forEach(d => d.items.sort((a, b) => a.order - b.order));
+  [warmup, ...days].forEach(d => [d.items, d.warmup || []].forEach(l => l.sort((a, b) => a.order - b.order)));
+  const guide = {};
+  for (const r of res.guide || []) {
+    const name = String(r.esercizio ?? '').trim();
+    if (name) guide[slug(name)] = { immagini: String(r.immagini ?? ''), muscoli: String(r.muscoli ?? ''), esecuzione: String(r.esecuzione ?? ''), consigli: String(r.consigli ?? ''), video: String(r.video ?? '') };
+  }
 
   const byId = new Map();
   for (const r of res.sessions) {
@@ -496,7 +519,7 @@ function fromSheet(res) {
     en.sets.push({ kg: num(r.kg), reps: num(r.reps) });
   }
   const sessions = [...byId.values()].filter(s => !isNaN(s.start)).sort((a, b) => a.start - b.start);
-  return { exercises, program: { warmup, days }, sessions, coachMessage: res.coach || '', sheetUrl: res.url };
+  return { exercises, program: { warmup, days }, guide, sessions, coachMessage: res.coach || '', sheetUrl: res.url };
 }
 
 const toSheet = s => ({ ...s, entries: s.entries.map(e => ({ ...e, name: exName(e.ex) })) });
@@ -635,7 +658,7 @@ function load() {
   // Nessun dato personale nel codice pubblicato: tutto arriva dal Foglio Google collegato.
   db = {
     link: null, sheetUrl: null, exercises: {}, program: { warmup: { id: 'warmup', name: 'Warm-up', items: [] }, days: [] },
-    coachMessage: '', sessions: [], outbox: [], pending: [], active: null, timer: null, lastSync: null, syncError: null,
+    coachMessage: '', guide: {}, sessions: [], outbox: [], pending: [], active: null, timer: null, lastSync: null, syncError: null,
     ...(db || {}),
   };
   save();
