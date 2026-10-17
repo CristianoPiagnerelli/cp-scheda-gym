@@ -74,7 +74,7 @@ textarea { width: 100%; min-height: 70px; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
 .chip { padding: 6px 10px; font-size: 13px; border-radius: 99px; }
 .chip.on[data-v="Easy"] { background: var(--ok); color: #04210f; }
-.chip.on[data-v="Barely/doable"] { background: var(--warn); color: #241600; }
+.chip.on[data-v="Doable"] { background: var(--warn); color: #241600; }
 .chip.on[data-v="Barely"] { background: #ff8c42; color: #241000; }
 .chip.on[data-v="Collapse"] { background: var(--bad); color: #2a0006; }
 .wu { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }

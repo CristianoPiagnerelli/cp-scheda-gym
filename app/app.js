@@ -2,7 +2,8 @@
 
 const KEY = 'cp-scheda-gym.v2';
 const IMG_BASE = 'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/';
-const OUTLOOKS = ['Easy', 'Barely/doable', 'Barely', 'Collapse'];
+const OUTLOOKS = ['Easy', 'Doable', 'Barely', 'Collapse'];
+const normOutlook = o => (/^barely\s*\/\s*doable$/i.test(String(o || '').trim()) ? 'Doable' : o || null);
 
 const $ = s => document.querySelector(s);
 const h = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -43,6 +44,14 @@ function lastEntry(exId) {
   return null;
 }
 
+// Ripetizioni mancate rispetto al minimo del range (serve per leggere i Collapse).
+const itemOf = exId => db.program.days.flatMap(d => d.items).find(i => i.ex === exId);
+function missedReps(e) {
+  const [lo] = range(itemOf(e.ex)?.reps ?? '');
+  return lo == null ? 0 : e.sets.reduce((n, s) => n + Math.max(0, lo - (s.reps ?? lo)), 0);
+}
+const outlookText = e => (e.outlook ? e.outlook + (e.outlook === 'Collapse' && missedReps(e) ? ` (−${missedReps(e)} reps)` : '') : '');
+
 function setsText(e, kind) {
   return e.sets.map(s => {
     if (kind === 'weight') return `${fmtKg(s.kg)}×${s.reps ?? '?'}`;
@@ -71,8 +80,12 @@ function suggest(item) {
   const why = [];
   const allTop = hi != null && sets.length >= item.sets && sets.every(s => (s.reps ?? 0) >= hi);
   const st = stepFor(kg);
-  if (last.e.outlook === 'Collapse') { kg -= st; why.push('ultima volta Collapse: un passo indietro'); }
-  else if (lo != null && sets.some(s => (s.reps ?? 0) < lo)) why.push('chiudi prima tutte le serie nel range');
+  const below = lo == null ? [] : sets.map((s, i) => ((s.reps ?? 0) < lo ? i : -1)).filter(i => i >= 0);
+  const missed = missedReps(last.e);
+  const onlyLast = below.length === 1 && below[0] === sets.length - 1;
+  if (last.e.outlook === 'Collapse' && onlyLast && missed <= 3) why.push(`cedimento all'ultima serie (−${missed}): stesso carico`);
+  else if (last.e.outlook === 'Collapse') { kg -= st; why.push(`Collapse${missed ? ` (−${missed} reps)` : ''}: un passo indietro`); }
+  else if (below.length) why.push('chiudi prima tutte le serie nel range');
   else if (allTop && last.e.outlook !== 'Barely') { kg += st; why.push(`chiuso tutto a ${hi}: +${fmtKg(st)} kg`); }
   else why.push('stesso carico, punta a più ripetizioni');
   const days = (Date.now() - last.s.start) / 864e5;
@@ -160,7 +173,7 @@ function exerciseCard(item, entry) {
   const unit = ex.kind === 'time' ? 'sec' : ex.kind === 'cardio' ? 'min' : 'reps';
   const sug = suggest(item);
   const lastTxt = last
-    ? `Ultima volta (${dateIt(last.s.start)}): <b>${setsText(last.e, ex.kind)}</b>${last.e.outlook ? ' · ' + h(last.e.outlook) : ''}`
+    ? `Ultima volta (${dateIt(last.s.start)}): <b>${setsText(last.e, ex.kind)}</b>${last.e.outlook ? ' · ' + h(outlookText(last.e)) : ''}`
     : item.weight != null ? `Ultimo carico registrato: <b>${fmtKg(item.weight)} kg</b>` : '';
   return `<div class="card ex ${done >= entry.sets.length ? 'done' : ''}">
     <div class="row between"><h3><a href="#/ex/${item.ex}" style="color:inherit">${h(ex.name)}</a></h3><span class="muted">${done}/${entry.sets.length}</span></div>
@@ -180,7 +193,8 @@ function exerciseCard(item, entry) {
       <button class="small ghost" data-act="addSet" data-ex="${item.ex}">+ serie</button>
       ${entry.sets.length > 1 ? `<button class="small ghost" data-act="delSet" data-ex="${item.ex}">− serie</button>` : ''}
     </div>
-    ${ex.kind === 'weight' ? `<div class="chips">${OUTLOOKS.map(o => `<button class="chip ${entry.outlook === o ? 'on' : ''}" data-act="outlook" data-ex="${item.ex}" data-v="${o}">${o}</button>`).join('')}</div>` : ''}
+    ${ex.kind === 'weight' ? `<div class="chips">${OUTLOOKS.map(o => `<button class="chip ${entry.outlook === o ? 'on' : ''}" data-act="outlook" data-ex="${item.ex}" data-v="${o}">${o}</button>`).join('')}</div>
+      ${entry.outlook === 'Collapse' ? '<div class="muted small" style="margin-top:6px">Segna nelle serie le reps fatte davvero: quelle mancanti le calcolo io.</div>' : ''}` : ''}
     <input type="text" class="full" style="margin-top:10px" placeholder="Nota" data-field="note" data-ex="${item.ex}" value="${h(entry.note || '')}">
   </div>`;
 }
@@ -196,7 +210,7 @@ function historyView() {
     ${[...db.sessions].reverse().map(s => `<details class="card">
       <summary class="row between"><div><h3>${dateIt(s.start)} · ${h(s.dayName)}</h3>
         <div class="muted small">${Math.round((s.end - s.start) / 60000)} min · ${s.entries.length} esercizi</div></div><span class="muted">›</span></summary>
-      <table>${s.entries.map(e => `<tr><td>${h(exName(e.ex))}</td><td>${setsText(e, db.exercises[e.ex]?.kind)}${e.outlook ? `<div class="muted small">${h(e.outlook)}</div>` : ''}${e.note ? `<div class="muted small">${h(e.note)}</div>` : ''}</td></tr>`).join('')}</table>
+      <table>${s.entries.map(e => `<tr><td>${h(exName(e.ex))}</td><td>${setsText(e, db.exercises[e.ex]?.kind)}${e.outlook ? `<div class="muted small">${h(outlookText(e))}</div>` : ''}${e.note ? `<div class="muted small">${h(e.note)}</div>` : ''}</td></tr>`).join('')}</table>
       ${s.note ? `<p class="muted">${h(s.note)}</p>` : ''}
       ${db.outbox.some(o => o.id === s.id) ? '<p class="tip">Non ancora salvato nel foglio: lo invio appena c\'è connessione.</p>' : ''}
     </details>`).join('')}
@@ -224,7 +238,7 @@ function exercisePage(id) {
     <p class="muted">${ex?.kind === 'weight' ? 'Carico massimo per allenamento (kg)' : 'Massimo per allenamento'}</p>
     ${pts.length > 1 ? chart(pts) : '<p class="muted">Servono almeno due allenamenti per il grafico.</p>'}
     <table><tr><th>Data</th><th>Serie</th><th></th></tr>
-      ${rows.reverse().map(r => `<tr><td>${dateIt(r.s.start)}</td><td>${setsText(r.e, ex?.kind)}</td><td class="muted">${h(r.e.outlook || '')}</td></tr>`).join('')}
+      ${rows.reverse().map(r => `<tr><td>${dateIt(r.s.start)}</td><td>${setsText(r.e, ex?.kind)}</td><td class="muted">${h(outlookText(r.e))}</td></tr>`).join('')}
     </table>` : ''}
     ${g?.immagini ? '<p class="muted small">Foto: Free Exercise DB (pubblico dominio).</p>' : ''}`;
 }
@@ -553,7 +567,7 @@ function fromSheet(res) {
     const exId = slug(r.esercizio);
     if (!exercises[exId]) exercises[exId] = { name: String(r.esercizio).trim(), kind: num(r.kg) != null ? 'weight' : 'reps', perSide: false };
     let en = s.entries.find(e => e.ex === exId);
-    if (!en) s.entries.push(en = { ex: exId, sets: [], outlook: r.outlook || null, note: String(r['nota esercizio'] ?? '') });
+    if (!en) s.entries.push(en = { ex: exId, sets: [], outlook: normOutlook(r.outlook), note: String(r['nota esercizio'] ?? '') });
     en.sets.push({ kg: num(r.kg), reps: num(r.reps) });
   }
   const sessions = [...byId.values()].filter(s => !isNaN(s.start)).sort((a, b) => a.start - b.start);
