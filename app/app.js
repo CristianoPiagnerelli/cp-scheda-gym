@@ -82,8 +82,9 @@ function suggest(item) {
   const st = stepFor(kg);
   const below = lo == null ? [] : sets.map((s, i) => ((s.reps ?? 0) < lo ? i : -1)).filter(i => i >= 0);
   const missed = missedReps(last.e);
-  const onlyLast = below.length === 1 && below[0] === sets.length - 1;
-  if (last.e.outlook === 'Collapse' && onlyLast && missed <= 3) why.push(`cedimento all'ultima serie (−${missed}): stesso carico`);
+  // Cedimento voluto: la prima serie è nel range e mancano poche reps in tutto -> stesso carico.
+  const firstOk = !below.includes(0);
+  if (last.e.outlook === 'Collapse' && firstOk && missed <= 5) why.push(`cedimento dalle ultime serie (−${missed}): stesso carico`);
   else if (last.e.outlook === 'Collapse') { kg -= st; why.push(`Collapse${missed ? ` (−${missed} reps)` : ''}: un passo indietro`); }
   else if (below.length) why.push('chiudi prima tutte le serie nel range');
   else if (allTop && last.e.outlook !== 'Barely') { kg += st; why.push(`chiuso tutto a ${hi}: +${fmtKg(st)} kg`); }
