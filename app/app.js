@@ -221,7 +221,7 @@ function exerciseCard(item, entry) {
       <button class="small ghost" data-act="addSet" data-ex="${item.ex}">+ serie</button>
       ${entry.sets.length > 1 ? `<button class="small ghost" data-act="delSet" data-ex="${item.ex}">− serie</button>` : ''}
     </div>
-    ${ex.kind === 'weight' ? `<div class="chips">${OUTLOOKS.map(o => `<button class="chip ${entry.outlook === o ? 'on' : ''}" data-act="outlook" data-ex="${item.ex}" data-v="${o}">${o}</button>`).join('')}</div>
+    ${ex.kind !== 'cardio' ? `<div class="chips">${OUTLOOKS.map(o => `<button class="chip ${entry.outlook === o ? 'on' : ''}" data-act="outlook" data-ex="${item.ex}" data-v="${o}">${o}</button>`).join('')}</div>
       ${entry.outlook === 'Collapse' ? '<div class="muted small" style="margin-top:6px">Segna nelle serie le reps fatte davvero: quelle mancanti le calcolo io.</div>' : ''}` : ''}
     <input type="text" class="full" style="margin-top:10px" placeholder="Nota" data-field="note" data-ex="${item.ex}" value="${h(entry.note || '')}">
   </div>`;
@@ -374,7 +374,9 @@ function startSession(dayId) {
     entries[item.ex] = {
       sets: Array.from({ length: item.sets }, (_, i) => {
         const ls = last?.e.sets[i] || last?.e.sets[last.e.sets.length - 1];
-        return { kg: sug?.kg ?? ls?.kg ?? item.weight ?? null, reps: sug ? lo : ls?.reps ?? lo, done: false };
+        // reps: mai sotto il minimo dell'obiettivo attuale (se il coach lo alza, si riparte da lì)
+        const reps = sug ? lo : Math.max(ls?.reps ?? 0, lo ?? 0) || null;
+        return { kg: sug?.kg ?? ls?.kg ?? item.weight ?? null, reps, done: false };
       }),
       outlook: null,
       note: '',
