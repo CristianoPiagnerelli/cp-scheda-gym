@@ -38,6 +38,9 @@ if __name__ == "__main__":
     else:
         for a in json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")):
             res = call(a)
+            if "program" in res:  # a volte Google risponde con la lettura invece che con l'azione: si riprova
+                time.sleep(3)
+                res = call(a)
             print(a["action"], a.get("dayName", ""), "->", res)
             if not res.get("ok"):
                 sys.exit(1)
