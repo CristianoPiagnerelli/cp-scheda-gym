@@ -130,3 +130,8 @@ nav a.on { color: var(--accent); font-weight: 700; }
 .sugg { margin-top: 6px; padding: 8px 10px; border-radius: 10px; background: #2a1c10; border-left: 3px solid var(--accent); font-size: 14px; }
 .sugg b { color: var(--accent); }
 .sugg-inline { color: var(--accent); font-size: 13px; }
+.set.timed { grid-template-columns: 26px 1fr 54px 54px; }
+.check.play { color: var(--ok); border-color: var(--ok); }
+#timer.work { background: #0f2418; border-top-color: var(--ok); }
+#timer.work #t-left { color: var(--ok); }
+#timer.work .t-bar i { background: var(--ok); }

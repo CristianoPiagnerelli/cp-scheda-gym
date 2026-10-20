@@ -43,7 +43,7 @@ function handle_(e, body) {
   try {
     if ((e.parameter.k || (body && body.k)) !== KEY) return out_({ ok: false, error: 'Chiave non valida' });
     const ss = setup_();
-    const act = body && { setRest: setRest_, setWarmup: setWarmup_, setGuide: setGuide_, setCoach: setCoach_, updateProgram: updateProgram_, deleteSessionsSince: deleteSessionsSince_ }[body.action];
+    const act = body && { addMemory: addMemory_, setDay: setDay_, setRest: setRest_, setWarmup: setWarmup_, setGuide: setGuide_, setCoach: setCoach_, updateProgram: updateProgram_, deleteSessionsSince: deleteSessionsSince_ }[body.action];
     if (act) return out_(act(ss, body));
     if (body && body.action === 'saveSession') return out_(saveSession_(ss, body.session));
     return out_(load_(ss));
@@ -64,6 +64,12 @@ function setup_() {
     log.appendRow(LOG_HEAD);
     log.setFrozenRows(1);
     log.getRange('A:A').setNumberFormat('dd/mm/yyyy HH:mm');
+  }
+  if (!ss.getSheetByName('Memoria')) {
+    const m = ss.insertSheet('Memoria');
+    m.getRange(1, 1, 1, 4).setValues([['Data', 'Tema', 'Nota', 'Fonte']]).setFontWeight('bold').setBackground('#ff7a1a').setFontColor('#ffffff');
+    m.setFrozenRows(1);
+    m.setColumnWidth(3, 600);
   }
   if (!ss.getSheetByName('Coach')) {
     const c = ss.insertSheet('Coach');
@@ -89,6 +95,7 @@ function load_(ss) {
     program: table_(ss.getSheetByName('Programma')),
     sessions: table_(ss.getSheetByName('Allenamenti')),
     guide: ss.getSheetByName('Guida') ? table_(ss.getSheetByName('Guida')) : [],
+    memory: table_(ss.getSheetByName('Memoria')),
     coach: String(ss.getSheetByName('Coach').getRange('A2').getValue() || ''),
     next: (c => ({ day: String(c[0][0] || ''), at: c[0][1] instanceof Date ? c[0][1].getTime() : Number(c[0][1]) || 0 }))(ss.getSheetByName('Coach').getRange('A5:B5').getValues()),
   };
@@ -251,4 +258,43 @@ function deleteSessionsSince_(ss, b) {
     if (v[r][0] instanceof Date && v[r][0].getTime() >= b.since) { log.deleteRow(r + 1); n++; }
   }
   return { ok: true, deleted: n };
+}
+
+/* ---------- memoria condivisa del coach (Claude sul PC e Claude sul telefono) ---------- */
+
+// b = { tema, nota, fonte } -> una riga in Memoria con la data di oggi.
+function addMemory_(ss, b) {
+  if (!b.nota) return { ok: false, error: 'nota vuota' };
+  ss.getSheetByName('Memoria').appendRow([new Date(), b.tema || '', b.nota, b.fonte || '']);
+  return { ok: true };
+}
+
+// Crea o sostituisce un giorno intero del Programma (warm-up compreso).
+// b = { dayName, items: [{ esercizio, tipo, serie, repsMin, repsMax, kg, recupero, perLato, note, fase }] }
+function setDay_(ss, b) {
+  const prog = ss.getSheetByName('Programma');
+  const h = ensureFase_(prog);
+  const col = n => h.indexOf(n);
+  const v = prog.getDataRange().getValues();
+  let at = -1;
+  for (let r = v.length - 1; r >= 1; r--) {
+    if (String(v[r][col('giorno')]).trim() === b.dayName) { prog.deleteRow(r + 1); at = r; }
+  }
+  const order = { w: 0, m: 0 };
+  const rows = (b.items || []).map(it => {
+    const warm = /^warm/i.test(it.fase || '');
+    const row = new Array(h.length).fill('');
+    const set = (n, x) => { if (col(n) >= 0) row[col(n)] = x == null ? '' : x; };
+    set('giorno', b.dayName); set('fase', warm ? 'Warm-up' : ''); set('ordine', warm ? ++order.w : ++order.m);
+    set('esercizio', it.esercizio); set('tipo', it.tipo || 'Corpo libero'); set('serie', it.serie || 1);
+    set('reps min', it.repsMin); set('reps max', it.repsMax ?? it.repsMin); set('kg', it.kg);
+    set('recupero (s)', warm ? '' : it.recupero); set('per lato', it.perLato ? 'Sì' : ''); set('note', it.note || '');
+    return row;
+  });
+  if (!rows.length) return { ok: true, deleted: true };
+  if (at < 0) at = prog.getLastRow(); // giorno nuovo: in fondo
+  prog.insertRowsAfter(Math.max(at, 1), rows.length);
+  prog.getRange(at + 1, 1, rows.length, h.length).setValues(rows).setBackground(null);
+  rows.forEach((r, i) => { if (r[col('fase')]) prog.getRange(at + 1 + i, 1, 1, h.length).setBackground('#fff3e8'); });
+  return { ok: true, rows: rows.length };
 }

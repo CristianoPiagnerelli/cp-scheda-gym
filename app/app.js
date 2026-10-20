@@ -23,6 +23,10 @@ const save = () => localStorage.setItem(KEY, JSON.stringify(db));
 const exName = id => db.exercises[id]?.name || id;
 const allDays = () => [db.program.warmup, ...db.program.days];
 const findDay = id => allDays().find(d => d.id === id);
+// I giorni il cui nome inizia con "Casa" formano la sezione Casa (allenamenti senza attrezzi).
+const isHome = d => /^casa/i.test(String(d?.name ?? d?.dayName ?? ''));
+const gymDays = () => db.program.days.filter(d => !isHome(d));
+const homeDays = () => db.program.days.filter(isHome);
 // warm-up del giorno (scheda Programma, Fase = Warm-up); altrimenti quello comune
 const warmupOf = day => (day.warmup?.length ? day.warmup : db.program.warmup.items);
 
@@ -95,8 +99,7 @@ function suggest(item) {
   return { kg: roundTo(kg, stepFor(kg)), by: 'auto', why: why.join(' · ') };
 }
 
-function nextDay() {
-  const days = db.program.days;
+function nextDay(days = gymDays()) {
   // scelto dal coach (scheda Coach del foglio), finché non fai un allenamento dopo quella data
   const forced = db.next?.day && days.find(d => d.name === db.next.day);
   if (forced && !db.sessions.some(s => s.start > (db.next.at || 0))) return forced;
@@ -119,28 +122,51 @@ function home() {
     <div class="card">${db.syncError ? `<p class="tip">Errore: ${h(db.syncError)}</p>` : '<p class="muted">Sto leggendo il foglio…</p>'}
       <button class="full" data-act="syncNow">Riprova</button></div>`;
   const a = db.active;
-  const week = db.sessions.filter(s => s.start > Date.now() - 7 * 864e5).length;
-  const month = db.sessions.filter(s => s.start > Date.now() - 28 * 864e5).length;
-  const nd = nextDay();
+  const gym = db.sessions.filter(s => !isHome(s));
+  const week = gym.filter(s => s.start > Date.now() - 7 * 864e5).length;
+  const month = gym.filter(s => s.start > Date.now() - 28 * 864e5).length;
+  const days = gymDays();
+  const nd = nextDay(days);
   return `
     <h1>Palestra</h1>
     ${db.coachMessage ? `<div class="card accent"><div class="muted small">Nota del coach</div><p>${h(db.coachMessage).replace(/\n/g, '<br>')}</p></div>` : ''}
-    ${a ? `<div class="card accent"><div class="row between"><div><h3>Allenamento in corso</h3><div class="muted">${h(findDay(a.dayId)?.name)} · iniziato alle ${clock(a.start).slice(0, 5)}</div></div><a class="btn primary" href="#/session">Riprendi</a></div></div>` : ''}
+    ${activeCard()}
     <p class="muted small">${db.syncError ? `⚠ Foglio non raggiungibile: ${h(db.syncError)}` : db.lastSync ? `Foglio sincronizzato alle ${clock(db.lastSync).slice(0, 5)}` : ''}${db.outbox.length ? ` · ${db.outbox.length} da inviare` : ''}</p>
     <div class="card row between">
       <div><b>${week}</b> <span class="muted">negli ultimi 7 giorni</span></div>
       <div><b>${(month / 4).toFixed(1).replace('.', ',')}</b> <span class="muted">a settimana (4 sett.)</span></div>
     </div>
     <h2>Scegli l'allenamento</h2>
-    ${db.program.days.map(d => {
-      const last = [...db.sessions].reverse().find(s => s.dayId === d.id);
-      return `<div class="card row between">
-        <div class="grow"><h3>${h(d.name)} ${d === nd ? '<span class="tag next">prossimo</span>' : ''}</h3>
-          <div class="muted small">${d.items.map(i => h(exName(i.ex))).join(' · ')}</div>
-          <div class="muted small">${last ? 'Ultima volta: ' + dateIt(last.start) : 'Mai fatto nell\'app'}</div></div>
-        <button class="${d === nd ? 'primary' : ''}" data-act="start" data-day="${d.id}" ${a ? 'disabled' : ''}>Inizia</button>
-      </div>`;
-    }).join('')}`;
+    ${days.map(d => dayCard(d, nd)).join('')}`;
+}
+
+function activeCard() {
+  const a = db.active;
+  return a ? `<div class="card accent"><div class="row between"><div><h3>Allenamento in corso</h3><div class="muted">${h(findDay(a.dayId)?.name)} · iniziato alle ${clock(a.start).slice(0, 5)}</div></div><a class="btn primary" href="#/session">Riprendi</a></div></div>` : '';
+}
+
+function dayCard(d, nd) {
+  const last = [...db.sessions].reverse().find(s => s.dayId === d.id);
+  return `<div class="card row between">
+    <div class="grow"><h3>${h(d.name)} ${d === nd ? '<span class="tag next">prossimo</span>' : ''}</h3>
+      ${d.note ? `<div class="muted small">${h(d.note)}</div>` : ''}
+      <div class="muted small">${d.items.map(i => h(exName(i.ex))).join(' · ')}</div>
+      <div class="muted small">${last ? 'Ultima volta: ' + dateIt(last.start) : 'Mai fatto nell\'app'}</div></div>
+    <button class="${d === nd ? 'primary' : ''}" data-act="start" data-day="${d.id}" ${db.active ? 'disabled' : ''}>Inizia</button>
+  </div>`;
+}
+
+function casa() {
+  const days = homeDays();
+  if (!days.length) return `<h1>Casa</h1><p class="muted">Ancora nessun allenamento a casa nel programma.</p>`;
+  const done = db.sessions.filter(isHome);
+  const week = done.filter(s => s.start > Date.now() - 7 * 864e5).length;
+  const nd = nextDay(days);
+  return `<h1>Casa</h1>
+    <p class="muted">15-20 minuti senza attrezzi. Negli esercizi a tempo premi ▶: 3" per prepararti, poi il timer del lavoro, poi il recupero parte da solo.</p>
+    ${activeCard()}
+    <div class="card row between"><div><b>${week}</b> <span class="muted">a casa negli ultimi 7 giorni</span></div></div>
+    ${days.map(d => dayCard(d, nd)).join('')}`;
 }
 
 function session() {
@@ -183,10 +209,11 @@ function exerciseCard(item, entry) {
     ${lastTxt ? `<div class="hint">${lastTxt}</div>` : ''}
     ${sug ? `<div class="sugg">${sug.by === 'coach' ? 'Suggerito dal coach' : 'Suggerito'}: <b>${fmtKg(sug.kg)} kg${ex.perSide ? '/lato' : ''}</b> × ${h(item.reps)}<div class="muted small">${h(sug.why)}</div></div>` : ''}
     <div class="sets">
-      ${entry.sets.map((s, i) => `<div class="set ${ex.kind === 'weight' ? '' : 'simple'}">
+      ${entry.sets.map((s, i) => `<div class="set ${ex.kind === 'weight' ? '' : ex.kind === 'time' ? 'simple timed' : 'simple'}">
         <span class="n">${i + 1}</span>
         ${ex.kind === 'weight' ? `<label><input type="number" inputmode="decimal" step="0.5" data-field="kg" data-ex="${item.ex}" data-i="${i}" value="${s.kg ?? ''}">kg</label>` : ''}
         <label><input type="number" inputmode="numeric" data-field="reps" data-ex="${item.ex}" data-i="${i}" value="${s.reps ?? ''}">${unit}</label>
+        ${ex.kind === 'time' ? `<button class="check play" data-act="work" data-ex="${item.ex}" data-i="${i}" ${s.done ? 'disabled' : ''}>▶</button>` : ''}
         <button class="check ${s.done ? 'on' : ''}" data-act="set" data-ex="${item.ex}" data-i="${i}">✓</button>
       </div>`).join('')}
     </div>
@@ -323,7 +350,7 @@ function data() {
 function render() {
   const [route, arg] = location.hash.replace(/^#\/?/, '').split('/');
   if (route === 'collega' && arg) return setLink(decodeURIComponent(arg));
-  const views = { '': home, session, history: historyView, ex: exercisePage, program, data };
+  const views = { '': home, casa, session, history: historyView, ex: exercisePage, program, data };
   $('#main').innerHTML = (views[route] || home)(arg && decodeURIComponent(arg));
   document.querySelectorAll('nav a').forEach(a => {
     const r = a.getAttribute('href').slice(2);
@@ -470,6 +497,12 @@ const actions = {
   finish: () => finishSession(),
   cancel: () => { if (confirm('Annullare l\'allenamento? Quanto segnato finora andrà perso.')) { db.active = null; db.timer = null; save(); clearNotif(); go('#/'); } },
   timerAdd: el => { if (db.timer) { db.timer.end += +el.dataset.sec * 1000; db.timer.total = Math.max(1, db.timer.total + +el.dataset.sec); save(); showTimerNotif(); tick(); } },
+  work: el => {
+    const item = findDay(db.active.dayId).items.find(i => i.ex === el.dataset.ex);
+    const set = db.active.entries[el.dataset.ex].sets[+el.dataset.i];
+    const sec = set.reps || range(item.reps)[0] || 30;
+    startTimer(3, `Preparati: ${exName(el.dataset.ex)}`, { mode: 'ready', work: sec, ex: el.dataset.ex, i: +el.dataset.i, rest: item.rest });
+  },
   timerSkip: () => { db.timer = null; save(); clearNotif(); tick(); },
   askNotif: async () => { await askNotif(); render(); },
   testSound: () => { unlockAudio(); setTimeout(() => { beep(); navigator.vibrate?.([400, 150, 400]); }, 150); },
@@ -614,9 +647,9 @@ let audio;
 function unlockAudio() {
   try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch {}
 }
-function beep() {
+function beep(n = 3) {
   if (!audio) return;
-  [0, 0.35, 0.7].forEach(t => {
+  [0, 0.35, 0.7].slice(0, n).forEach(t => {
     const o = audio.createOscillator(), g = audio.createGain();
     o.frequency.value = 880;
     g.gain.setValueAtTime(0.0001, audio.currentTime + t);
@@ -628,8 +661,9 @@ function beep() {
   });
 }
 
-function startTimer(sec, label) {
-  db.timer = { end: Date.now() + sec * 1000, total: sec, label };
+// mode: 'rest' (recupero), 'ready' (3" per prepararsi) e 'work' (esercizio a tempo).
+function startTimer(sec, label, extra = {}) {
+  db.timer = { end: Date.now() + sec * 1000, total: sec, label, mode: 'rest', ...extra };
   save();
   unlockAudio();
   showTimerNotif();
@@ -650,14 +684,29 @@ function tick() {
     save();
     box.hidden = true;
     document.body.classList.remove('has-timer');
-    if (left > -30) alarm(); // non suonare se l'app viene riaperta molto dopo
+    if (left <= -30) return; // app riaperta molto dopo: niente suoni
+    if (t.mode === 'ready') { beep(1); return startTimer(t.work, `LAVORO · ${exName(t.ex)}`, { mode: 'work', ex: t.ex, i: t.i, rest: t.rest }); }
+    if (t.mode === 'work') return workDone(t);
+    alarm();
     return;
   }
   box.hidden = false;
+  box.classList.toggle('work', t.mode !== 'rest');
   $('#t-left').textContent = mmss(left);
   $('#t-label').textContent = t.label;
   $('#t-end').textContent = `fine alle ${clock(t.end)}`;
   $('#t-bar').style.width = `${Math.min(100, (1 - left / t.total) * 100)}%`;
+}
+
+// Fine di un esercizio a tempo: segna la serie fatta e fa partire il recupero.
+function workDone(t) {
+  navigator.vibrate?.([300, 100, 300]);
+  beep(2);
+  const set = db.active?.entries[t.ex]?.sets[t.i];
+  if (set) set.done = true;
+  save();
+  if (t.rest > 0) startTimer(t.rest, `Recupero · ${exName(t.ex)}`, { mode: 'rest' });
+  if (onSessionPage()) render();
 }
 
 // Beep (auricolari se collegati, altrimenti cassa) + notifica con il suono di sistema: a Cristiano piacciono entrambi.
