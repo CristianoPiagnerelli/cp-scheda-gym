@@ -503,7 +503,9 @@ const actions = {
     const item = findDay(db.active.dayId).items.find(i => i.ex === el.dataset.ex);
     const set = db.active.entries[el.dataset.ex].sets[+el.dataset.i];
     const sec = set.reps || range(item.reps)[0] || 30;
-    startTimer(3, `Preparati: ${exName(el.dataset.ex)}`, { mode: 'ready', work: sec, ex: el.dataset.ex, i: +el.dataset.i, rest: item.rest });
+    // esercizi "per lato" (es. Side Plank): lato 1, 5" per cambiare, lato 2, poi recupero
+    const sides = db.exercises[el.dataset.ex]?.perSide || /per lato/i.test(item.note || '') ? 2 : 1;
+    startTimer(3, `Preparati: ${exName(el.dataset.ex)}`, { mode: 'ready', work: sec, ex: el.dataset.ex, i: +el.dataset.i, rest: item.rest, sides, side: 1 });
   },
   timerSkip: () => { db.timer = null; save(); clearNotif(); tick(); },
   askNotif: async () => { await askNotif(); render(); },
@@ -665,7 +667,7 @@ function beep(n = 3) {
 
 // mode: 'rest' (recupero), 'ready' (3" per prepararsi) e 'work' (esercizio a tempo).
 function startTimer(sec, label, extra = {}) {
-  db.timer = { end: Date.now() + sec * 1000, total: sec, label, mode: 'rest', ...extra };
+  db.timer = { mode: 'rest', ...extra, end: Date.now() + sec * 1000, total: sec, label };
   save();
   unlockAudio();
   showTimerNotif();
@@ -687,7 +689,9 @@ function tick() {
     box.hidden = true;
     document.body.classList.remove('has-timer');
     if (left <= -30) return; // app riaperta molto dopo: niente suoni
-    if (t.mode === 'ready') { beep(1); return startTimer(t.work, `LAVORO · ${exName(t.ex)}`, { mode: 'work', ex: t.ex, i: t.i, rest: t.rest }); }
+    const sideTxt = t.sides > 1 ? ` · lato ${t.side}` : '';
+    if (t.mode === 'ready') { beep(1); return startTimer(t.work, `LAVORO · ${exName(t.ex)}${sideTxt}`, { ...t, mode: 'work' }); }
+    if (t.mode === 'work' && t.side < t.sides) { beep(2); navigator.vibrate?.([300]); return startTimer(5, `Cambia lato · ${exName(t.ex)}`, { ...t, mode: 'ready', side: t.side + 1 }); }
     if (t.mode === 'work') return workDone(t);
     alarm();
     return;
