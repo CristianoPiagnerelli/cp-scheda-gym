@@ -229,12 +229,8 @@ function exerciseCard(item, entry) {
 
 function historyView() {
   if (!db.sessions.length) return `<h1>Storico</h1><p class="muted">Ancora nessun allenamento salvato. Finisci il primo e lo trovi qui.</p>`;
-  const exIds = [...new Set(db.sessions.flatMap(s => s.entries.map(e => e.ex)))]
-    .filter(id => db.exercises[id]?.kind === 'weight');
   return `<h1>Storico</h1>
-    <details class="card"><summary><h3>Progressi per esercizio ›</h3></summary>
-      ${exIds.map(id => `<p><a href="#/ex/${id}">${h(exName(id))}</a></p>`).join('')}
-    </details>
+    <a class="btn full" href="#/progress" style="margin-bottom:6px">📈 Progressi per esercizio</a>
     ${[...db.sessions].reverse().map(s => `<details class="card">
       <summary class="row between"><div><h3>${dateIt(s.start)} · ${h(s.dayName)}</h3>
         <div class="muted small">${Math.round((s.end - s.start) / 60000)} min · ${s.entries.length} esercizi</div></div><span class="muted">›</span></summary>
@@ -248,7 +244,6 @@ function historyView() {
 function exercisePage(id) {
   const ex = db.exercises[id];
   const rows = db.sessions.map(s => ({ s, e: s.entries.find(e => e.ex === id) })).filter(r => r.e);
-  const pts = rows.map(r => ({ t: r.s.start, v: Math.max(...r.e.sets.map(x => (ex?.kind === 'weight' ? x.kg : x.reps) || 0)) }));
   const g = db.guide?.[id];
   const list = txt => String(txt || '').split('|').map(x => x.trim()).filter(Boolean);
   const imgs = list(g?.immagini?.replace(/,/g, '|')).flatMap(x => (/^https?:/.test(x) ? [x] : [0, 1].map(n => `${IMG_BASE}${x}/${n}.jpg`)));
@@ -262,29 +257,112 @@ function exercisePage(id) {
       ${list(g.consigli).length ? `<h3>Consigli</h3><ul class="steps">${list(g.consigli).map(x => `<li>${h(x)}</li>`).join('')}</ul>` : ''}
     </div>` : '<p class="muted">Guida non ancora disponibile per questo esercizio.</p>'}
     <a class="btn full" href="${video}" target="_blank" rel="noopener">▶ Guarda un video</a>
-    ${rows.length ? `<h2>I tuoi progressi</h2>
-    <p class="muted">${ex?.kind === 'weight' ? 'Carico massimo per allenamento (kg)' : 'Massimo per allenamento'}</p>
-    ${pts.length > 1 ? chart(pts) : '<p class="muted">Servono almeno due allenamenti per il grafico.</p>'}
-    <table><tr><th>Data</th><th>Serie</th><th></th></tr>
-      ${rows.reverse().map(r => `<tr><td>${dateIt(r.s.start)}</td><td>${setsText(r.e, ex?.kind)}</td><td class="muted">${h(outlookText(r.e))}</td></tr>`).join('')}
-    </table>` : ''}
+    ${rows.length ? `<h2>I tuoi progressi</h2>${progressBlock(id)}` : ''}
     ${g?.immagini ? '<p class="muted small">Foto: Free Exercise DB (pubblico dominio).</p>' : ''}`;
 }
 
-function chart(pts) {
-  const W = 340, H = 160, P = 28;
-  const t0 = pts[0].t, t1 = pts[pts.length - 1].t || t0 + 1;
-  const vs = pts.map(p => p.v), lo = Math.min(...vs), hi = Math.max(...vs);
-  const x = t => P + ((t - t0) / (t1 - t0 || 1)) * (W - 2 * P);
-  const y = v => H - P - ((v - lo) / (hi - lo || 1)) * (H - 2 * P);
-  const line = pts.map(p => `${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
+/* ---------- progressi: carico, reps medie e forza stimata (1RM) ---------- */
+
+// 1RM stimato = media di Epley e Brzycki sulla serie migliore (affidabile fino a ~10-12 reps).
+const e1rm = (kg, reps) => (!kg || !reps ? 0 : reps === 1 ? kg : (kg * (1 + reps / 30) + kg * 36 / (37 - Math.min(reps, 30))) / 2);
+
+function progressPoints(id) {
+  const kind = db.exercises[id]?.kind;
+  return db.sessions.map(s => ({ s, e: s.entries.find(e => e.ex === id) })).filter(r => r.e && r.e.sets.length).map(({ s, e }) => {
+    const reps = e.sets.map(x => x.reps || 0);
+    return {
+      t: s.start, s, e,
+      kg: kind === 'weight' ? Math.max(...e.sets.map(x => x.kg || 0)) : null,
+      reps: reps.reduce((a, b) => a + b, 0) / reps.length,
+      tot: reps.reduce((a, b) => a + b, 0),
+      f: kind === 'weight' ? Math.max(...e.sets.map(x => e1rm(x.kg, x.reps))) : null,
+    };
+  });
+}
+
+function progressChart(pts, kind) {
+  const W = 360, H = 230, L = 36, R = 34, T = 12, B = 28;
+  const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
+  const x = t => L + (pts.length < 2 ? (W - L - R) / 2 : ((t - t0) / (t1 - t0 || 1)) * (W - L - R));
+  const scale = vals => {
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    if (hi === lo) { lo -= 1; hi += 1; }
+    const d = (hi - lo) * 0.08; lo -= d; hi += d;
+    return { lo, hi, y: v => T + (1 - (v - lo) / (hi - lo)) * (H - T - B) };
+  };
+  const weight = kind === 'weight';
+  const left = weight ? scale(pts.flatMap(p => [p.kg, p.f])) : null;
+  const right = scale(pts.map(p => p.reps));
+  const line = (key, sc, color, dash) => {
+    const d = pts.map(p => `${x(p.t).toFixed(1)},${sc.y(p[key]).toFixed(1)}`).join(' ');
+    return `${pts.length > 1 ? `<polyline points="${d}" fill="none" stroke="${color}" stroke-width="2.5" ${dash ? `stroke-dasharray="${dash}"` : ''}/>` : ''}
+      ${pts.map(p => `<circle cx="${x(p.t).toFixed(1)}" cy="${sc.y(p[key]).toFixed(1)}" r="3.5" fill="${color}"/>`).join('')}`;
+  };
+  const ticks = (sc, side, color, fmt) => [sc.lo, (sc.lo + sc.hi) / 2, sc.hi].map(v =>
+    `<text x="${side === 'l' ? 2 : W - 2}" y="${(sc.y(v) + 4).toFixed(1)}" fill="${color}" text-anchor="${side === 'l' ? 'start' : 'end'}">${fmt(v)}</text>`).join('');
+  const grid = [0, 0.5, 1].map(f => { const yy = T + f * (H - T - B); return `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="var(--line)" stroke-width="0.6"/>`; }).join('');
+  const unit = kind === 'time' ? 's' : kind === 'cardio' ? "'" : '';
   return `<svg class="chart" viewBox="0 0 ${W} ${H}">
-    <line x1="${P}" y1="${H - P}" x2="${W - P}" y2="${H - P}" stroke="var(--line)"/>
-    <text x="2" y="${y(hi) + 4}">${fmtKg(hi)}</text><text x="2" y="${y(lo) + 4}">${fmtKg(lo)}</text>
-    <text x="${P}" y="${H - 8}">${dateIt(t0)}</text><text x="${W - P}" y="${H - 8}" text-anchor="end">${dateIt(t1)}</text>
-    <polyline points="${line}" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
-    ${pts.map(p => `<circle cx="${x(p.t).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="3.5" fill="var(--accent)"/>`).join('')}
-  </svg>`;
+    ${grid}
+    ${weight ? ticks(left, 'l', 'var(--accent)', v => fmtKg(Math.round(v * 2) / 2)) : ''}
+    ${ticks(right, 'r', 'var(--rep)', v => Math.round(v) + unit)}
+    <text x="${L}" y="${H - 8}">${dateIt(t0)}</text>${pts.length > 1 ? `<text x="${W - R}" y="${H - 8}" text-anchor="end">${dateIt(t1)}</text>` : ''}
+    ${line('reps', right, 'var(--rep)')}
+    ${weight ? line('kg', left, 'var(--accent)') + line('f', left, 'var(--ok)', '6 4') : ''}
+  </svg>
+  <div class="legend">
+    ${weight ? '<span><i style="background:var(--accent)"></i>Carico max (kg)</span><span><i class="dash"></i>Forza stimata 1RM (kg)</span>' : ''}
+    <span><i style="background:var(--rep)"></i>${kind === 'time' ? 'Secondi medi per serie' : kind === 'cardio' ? 'Minuti' : 'Reps medie per serie'}</span>
+  </div>`;
+}
+
+function progressBlock(id) {
+  const ex = db.exercises[id];
+  const pts = progressPoints(id);
+  if (!pts.length) return '<p class="muted">Ancora nessun allenamento con questo esercizio.</p>';
+  const first = pts[0], last = pts[pts.length - 1];
+  const pct = (a, b) => (b ? `${a >= b ? '+' : ''}${Math.round((a / b - 1) * 100)}%` : '');
+  const half = v => fmtKg(Math.round(v * 2) / 2);
+  const weight = ex?.kind === 'weight';
+  const best = weight ? pts.reduce((m, p) => (p.f > m.f ? p : m)) : pts.reduce((m, p) => (p.reps > m.reps ? p : m));
+  const stats = weight
+    ? `<div class="stats">
+        <div><b>${half(last.f)} kg</b><span>forza stimata (1RM)</span><em>${pts.length > 1 ? pct(last.f, first.f) + ' dal ' + dateIt(first.t) : ''}</em></div>
+        <div><b>${fmtKg(last.kg)} kg</b><span>carico ultima volta</span><em>${pts.length > 1 ? pct(last.kg, first.kg) : ''}</em></div>
+        <div><b>${half(best.f)} kg</b><span>record 1RM</span><em>${dateIt(best.t)}</em></div>
+      </div>`
+    : `<div class="stats">
+        <div><b>${Math.round(last.reps)}</b><span>${ex?.kind === 'time' ? 'secondi medi' : 'reps medie'} ultima volta</span><em>${pts.length > 1 ? pct(last.reps, first.reps) : ''}</em></div>
+        <div><b>${last.tot}</b><span>totale ultima volta</span><em></em></div>
+        <div><b>${Math.round(best.reps)}</b><span>record</span><em>${dateIt(best.t)}</em></div>
+      </div>`;
+  return `${stats}
+    ${progressChart(pts, ex?.kind)}
+    ${weight ? '<p class="muted small">Forza stimata = quanto sollevi per 1 ripetizione, calcolata dalla serie migliore (media delle formule di Epley e Brzycki). Affidabile fino a circa 10-12 reps: è una tendenza, non un record da tentare.</p>' : ''}
+    <table><tr><th>Data</th><th>Serie</th><th></th></tr>
+      ${[...pts].reverse().map(p => `<tr><td>${dateIt(p.t)}${isEstimate(p.s) ? ' *' : ''}</td><td>${setsText(p.e, ex?.kind)}</td><td class="muted">${h(outlookText(p.e))}</td></tr>`).join('')}
+    </table>
+    ${pts.some(p => isEstimate(p.s)) ? '<p class="muted small">* valori stimati (rientro dopo la pausa, non misurati)</p>' : ''}`;
+}
+const isEstimate = s => String(s.id).startsWith('stima');
+
+function progressView(arg) {
+  const used = new Set(db.sessions.flatMap(s => s.entries.map(e => e.ex)));
+  const ids = [...used].filter(id => db.exercises[id]);
+  if (!ids.length) return `<h1>Progressi</h1><p class="muted">Ancora nessun allenamento salvato.</p>`;
+  let sel = arg && used.has(arg) ? arg : null;
+  if (!sel) { try { sel = localStorage.getItem('cp-progress-ex'); } catch {} }
+  if (!sel || !used.has(sel)) sel = ids.find(id => db.exercises[id].kind === 'weight') || ids[0];
+  try { localStorage.setItem('cp-progress-ex', sel); } catch {}
+  const groups = [['Pesi', id => db.exercises[id].kind === 'weight'], ['Corpo libero e a tempo', id => db.exercises[id].kind !== 'weight']];
+  const opts = groups.map(([label, f]) => {
+    const list = ids.filter(f).sort((a, b) => exName(a).localeCompare(exName(b)));
+    return list.length ? `<optgroup label="${label}">${list.map(id => `<option value="${id}" ${id === sel ? 'selected' : ''}>${h(exName(id))}</option>`).join('')}</optgroup>` : '';
+  }).join('');
+  return `<h1>Progressi</h1>
+    <select class="full" id="progSel">${opts}</select>
+    <div class="row between" style="margin:12px 0 4px"><h2 style="margin:0">${h(exName(sel))}</h2><a href="#/ex/${sel}" class="small">guida ›</a></div>
+    ${progressBlock(sel)}`;
 }
 
 function program() {
@@ -350,7 +428,7 @@ function data() {
 function render() {
   const [route, arg] = location.hash.replace(/^#\/?/, '').split('/');
   if (route === 'collega' && arg) return setLink(decodeURIComponent(arg));
-  const views = { '': home, casa, session, history: historyView, ex: exercisePage, program, data };
+  const views = { '': home, casa, session, history: historyView, progress: progressView, ex: exercisePage, program, data };
   $('#main').innerHTML = (views[route] || home)(arg && decodeURIComponent(arg));
   document.querySelectorAll('nav a').forEach(a => {
     const r = a.getAttribute('href').slice(2);
@@ -533,6 +611,10 @@ function autoClose() {
   const a = db?.active;
   if (a && Date.now() - (a.lastAt || a.start) > IDLE_CLOSE) finishSession(true);
 }
+
+document.addEventListener('change', e => {
+  if (e.target.id === 'progSel') go(`#/progress/${e.target.value}`);
+});
 
 document.addEventListener('input', e => {
   const el = e.target;
